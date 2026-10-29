@@ -6,11 +6,16 @@ import type { Library } from '../hooks'
 import { useDialogs } from './Dialogs'
 import { saveBlob } from '../util'
 
+const COMMON_LLM_MODELS = ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1', 'o4-mini'] as const
+const LLM_MODEL_CUSTOM = '__custom__'
+const isCommonLlmModel = (m: string) => (COMMON_LLM_MODELS as readonly string[]).includes(m)
+
 export function SettingsView({ settings, save, lib }: { settings: Settings; save: (s: Settings) => Promise<void>; lib: Library }) {
   const t = useT()
   const { confirm } = useDialogs()
   const [s, setS] = useState(settings)
   const [msg, setMsg] = useState('')
+  const [modelCustom, setModelCustom] = useState(() => !isCommonLlmModel(settings.llm.model))
   const file = useRef<HTMLInputElement>(null)
   const up = (patch: Partial<Settings>) => setS((c) => ({ ...c, ...patch }))
   const upLlm = (patch: Partial<Settings['llm']>) => setS((c) => ({ ...c, llm: { ...c.llm, ...patch } }))
@@ -79,7 +84,34 @@ export function SettingsView({ settings, save, lib }: { settings: Settings; save
       <p className="muted">{t('llm_hint')}</p>
       <label>{t('endpoint')}<input value={s.llm.endpoint} onChange={(e) => upLlm({ endpoint: e.target.value })} /></label>
       <label>{t('api_key')}<input type="password" autoComplete="off" value={s.llm.apiKey} onChange={(e) => upLlm({ apiKey: e.target.value })} /></label>
-      <label>{t('model')}<input value={s.llm.model} onChange={(e) => upLlm({ model: e.target.value })} /></label>
+      <label>{t('model')}
+        <select
+          value={modelCustom ? LLM_MODEL_CUSTOM : s.llm.model}
+          onChange={(e) => {
+            const v = e.target.value
+            if (v === LLM_MODEL_CUSTOM) {
+              setModelCustom(true)
+              return
+            }
+            setModelCustom(false)
+            upLlm({ model: v })
+          }}
+        >
+          {COMMON_LLM_MODELS.map((m) => (
+            <option key={m} value={m}>{m}</option>
+          ))}
+          <option value={LLM_MODEL_CUSTOM}>{t('model_custom')}</option>
+        </select>
+      </label>
+      {modelCustom && (
+        <label>{t('model_custom_id')}
+          <input
+            value={s.llm.model}
+            onChange={(e) => upLlm({ model: e.target.value })}
+            placeholder="gpt-4o-mini"
+          />
+        </label>
+      )}
       <div className="grid3">
         <label>{t('batch_size')}<input type="number" min={1} max={100} value={s.llm.batchSize} onChange={(e) => upLlm({ batchSize: num(e.target.value, 20) })} /></label>
         <label>{t('interval_ms')}<input type="number" min={0} step={500} value={s.llm.intervalMs} onChange={(e) => upLlm({ intervalMs: num(e.target.value, 2000) })} /></label>

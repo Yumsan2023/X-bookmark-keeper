@@ -112,6 +112,8 @@ const dict = {
   endpoint: { zh: '接口地址 (base URL)', en: 'Endpoint (base URL)' },
   api_key: { zh: 'API Key', en: 'API key' },
   model: { zh: '模型', en: 'Model' },
+  model_custom: { zh: '自定义 / Custom', en: 'Custom' },
+  model_custom_id: { zh: '自定义模型 ID', en: 'Custom model ID' },
   batch_size: { zh: '每批条数', en: 'Batch size' },
   interval_ms: { zh: '批间隔 (毫秒)', en: 'Batch interval (ms)' },
   allow_new_folders: { zh: '允许模型建议新文件夹', en: 'Allow new folder suggestions' },

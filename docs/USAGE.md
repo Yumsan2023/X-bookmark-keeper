@@ -199,7 +199,7 @@ npm run build          # 生成 dist/
 | 页间延迟 min/max | 越大越安全，发帖同步尤甚 |
 | 每页条数 | 请求分页大小（有上下限） |
 | 导出每批条数 | 分批导出切片大小 |
-| LLM | endpoint（OpenAI 兼容）、Key、模型、批次与间隔；Key 仅存本机 `chrome.storage.local` |
+| LLM | endpoint（OpenAI 兼容）、Key、模型（常用模型下拉 +「自定义」自由输入）、批次与间隔；Key 仅存本机 `chrome.storage.local` |
 | 备份导入导出 / 清空 | 清空会删本地 IndexedDB 数据，请先备份 |
 
 配置 LLM 并保存时，扩展可能请求该 API 域名的**可选权限**。推文文本会发往你配置的接口；无 Key 时书签页不显示 AI 入口。

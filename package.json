@@ -1,6 +1,6 @@
 {
   "name": "bookmark-keeper",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "private": true,
   "type": "module",
   "description": "X (Twitter) 书签/发帖管理 Chrome MV3 扩展:同步、搜索、归类、导出",
