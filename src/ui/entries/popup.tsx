@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import { useLibrary, useSettings } from '../hooks'
 import { I18nProvider, useT } from '../i18n'
@@ -5,11 +6,11 @@ import { DialogProvider } from '../components/Dialogs'
 import { ProgressBox, SyncControls } from '../components/SyncView'
 import '../styles.css'
 
-function Popup() {
+function Popup({ themeClass }: { themeClass: string }) {
   const t = useT()
   const lib = useLibrary()
   return (
-    <div className="popup">
+    <div className={`popup ${themeClass}`}>
       <h1>🔖 Bookmark Keeper</h1>
       <p className="muted">{t('total_in_library')} {lib.posts.length}</p>
       <SyncControls compact />
@@ -27,9 +28,15 @@ function Popup() {
 
 function Root() {
   const [s] = useSettings()
+  const themeClass = s.theme === 'light' ? 'theme-x-light' : 'theme-x-dark'
+  useEffect(() => {
+    const root = document.documentElement
+    root.classList.remove('theme-x-dark', 'theme-x-light')
+    root.classList.add(themeClass)
+  }, [themeClass])
   return (
     <I18nProvider lang={s.lang}>
-      <DialogProvider><Popup /></DialogProvider>
+      <DialogProvider><Popup themeClass={themeClass} /></DialogProvider>
     </I18nProvider>
   )
 }

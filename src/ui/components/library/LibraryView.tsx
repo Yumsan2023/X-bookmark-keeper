@@ -47,10 +47,12 @@ function loadColumns(): LibraryColumnId[] {
 export function LibraryView({
   lib,
   settings,
+  save,
   onSync,
 }: {
   lib: Library
   settings: Settings
+  save: (s: Settings) => Promise<void>
   onSync?: () => void
 }) {
   const t = useT()
@@ -223,6 +225,21 @@ export function LibraryView({
             }}
           >
             ↻
+          </button>
+          <button
+            type="button"
+            className="lib-tool"
+            title={t('theme_toggle')}
+            aria-label={t('theme_toggle')}
+            onClick={() => {
+              const theme = settings.theme === 'light' ? 'dark' : 'light'
+              void save({ ...settings, theme })
+            }}
+          >
+            {settings.theme === 'light' ? '🌙' : '☀️'}
+            <span className="muted" style={{ marginLeft: 4 }}>
+              {settings.theme === 'light' ? t('theme_dark') : t('theme_light')}
+            </span>
           </button>
         </div>
         <span className="spacer" />

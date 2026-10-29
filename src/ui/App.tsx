@@ -69,12 +69,21 @@ function Shell({ mode }: { mode: 'full' | 'side' }) {
   const openAuthor = (screenName: string) => {
     open(`from:${screenName.replace(/^@/, '')}`)
   }
+  const theme = settings.theme === 'light' ? 'light' : 'dark'
+  const themeClass = theme === 'light' ? 'theme-x-light' : 'theme-x-dark'
+
+  useEffect(() => {
+    const root = document.documentElement
+    root.classList.remove('theme-x-dark', 'theme-x-light')
+    root.classList.add(themeClass)
+  }, [themeClass])
+
   const tabs: Tab[] =
     mode === 'full'
       ? ['library', 'search', 'folders', 'tags', 'sync', 'settings']
       : ['library', 'search', 'folders', 'sync']
   return (
-    <div className={`app ${mode} theme-x-dark`}>
+    <div className={`app ${mode} ${themeClass}`}>
       <header className="topbar">
         <h1>🔖 {mode === 'full' ? t('app_title') : 'Bookmark Keeper'}</h1>
         <nav>
@@ -99,7 +108,7 @@ function Shell({ mode }: { mode: 'full' | 'side' }) {
       )}
       <main className={tab === 'library' ? 'main-library' : undefined}>
         <div hidden={tab !== 'library'}>
-          <LibraryView lib={lib} settings={settings} onSync={() => setTab('sync')} />
+          <LibraryView lib={lib} settings={settings} save={save} onSync={() => setTab('sync')} />
         </div>
         <div hidden={tab !== 'search'}>
           <SearchView lib={lib} settings={settings} compact={mode === 'side'} preset={preset} />

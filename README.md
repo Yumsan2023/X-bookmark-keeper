@@ -1,6 +1,6 @@
 # Bookmark Keeper — X (Twitter) 书签管家 (Chrome MV3 扩展)
 
-**当前版本: 0.4.0** — X 风格深色 UI、书签列表页（表格/列开关/筛选与导出面板）；保留 0.3.0 同步报告。
+**当前版本: 0.4.1** — 深色/浅色主题开关（设置页 + 列表工具栏，默认深色）；保留 0.4.0 列表页与 0.3.0 同步报告。
 
 把你在 X 上的**书签**与指定账号的**公开发帖**(UserTweets)同步到本地 IndexedDB，提供中英文全文搜索、文件夹/标签管理、批量操作、导出和可选的 AI 自动归类。
 
@@ -9,7 +9,7 @@
 <details>
 <summary><strong>English summary</strong></summary>
 
-Chrome MV3 extension that syncs your X (Twitter) **bookmarks** and optional public **UserTweets** timelines into local IndexedDB. v0.4 adds an X-style dark library table (column toggles, filter/export panels, paginated Dexie reads). Also: Chinese/English full-text search (MiniSearch + `Intl.Segmenter`), folders/tags, bulk actions, batched export (JSON/CSV/Markdown/Obsidian), optional OpenAI-compatible AI classification. Auth is captured from your logged-in x.com tab (no official paid API). Inspired by twillot’s architecture ideas only — fully rewritten. **Not verified against real X accounts** in this repo; unit tests + Mock-X e2e only. May violate X ToS; use at your own risk. MIT License.
+Chrome MV3 extension that syncs your X (Twitter) **bookmarks** and optional public **UserTweets** timelines into local IndexedDB. v0.4.1 adds light/dark theme toggle (default dark). v0.4 added an X-style library table (column toggles, filter/export panels, paginated Dexie reads). Also: Chinese/English full-text search (MiniSearch + `Intl.Segmenter`), folders/tags, bulk actions, batched export (JSON/CSV/Markdown/Obsidian), optional OpenAI-compatible AI classification. Auth is captured from your logged-in x.com tab (no official paid API). Inspired by twillot’s architecture ideas only — fully rewritten. **Not verified against real X accounts** in this repo; unit tests + Mock-X e2e only. May violate X ToS; use at your own risk. MIT License.
 
 Step-by-step: [docs/USAGE.md](./docs/USAGE.md) · Develop: [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md) · Contribute: [CONTRIBUTING.md](./CONTRIBUTING.md)
 
@@ -44,7 +44,7 @@ Step-by-step: [docs/USAGE.md](./docs/USAGE.md) · Develop: [docs/DEVELOPMENT.md]
 | 一键同步「我发过的全部帖子」（会话解析 screen_name → UserTweets） | ✅ 单测；真实接口未验证 |
 | 发帖与书签分区（`source: timeline\|bookmark`，文件夹 `timeline:@handle`） | ✅ |
 | 全量同步报告（内容分布 + Top 作者；完成后自动弹出，也可在「同步」页打开） | ✅ 单测 |
-| X 风格深色主题（近黑背景、深灰卡片、白底主按钮） | ✅ |
+| X 风格深色/浅色主题（可切换，默认深色；设置页 + 列表工具栏） | ✅ |
 | 书签列表页：表格列（#/用户/文件夹/帖子/媒体/浏览/转发/喜欢/回复/时间）、列显示开关与重置 | ✅ |
 | 列表页筛选面板（日期快捷范围、最旧优先、文件夹/内容/帖子类型/@用户/可用性） | ✅ |
 | 列表页导出面板（帖子|媒体、全部/已选、CSV/JSON/Markdown/PDF、自定义文件名；走现有 export/batch） | ✅ |
@@ -63,7 +63,7 @@ Step-by-step: [docs/USAGE.md](./docs/USAGE.md) · Develop: [docs/DEVELOPMENT.md]
 | 媒体批量下载（`chrome.downloads`，图片取 `:orig`，视频取较高码率 mp4） | ⚠️ 文件名/URL 生成有单测；实际下载未验证 |
 | AI 自动归类（OpenAI 兼容 endpoint + Key；分批限速；预览后再应用；无 Key 隐藏入口） | ✅ 提示词/解析/分批单测；**未对真实 LLM 实测** |
 | 线程抓取（TweetDetail，同作者自回复链；同步时可选开关，也可对选中项手动抓取） | ✅ 单测 + Mock e2e；真实响应结构未验证 |
-| 设置页：同步选项、页间延迟、中/英语言、LLM 配置、备份导入导出、清空数据 | ✅ |
+| 设置页：主题、同步选项、页间延迟、中/英语言、LLM 配置、备份导入导出、清空数据 | ✅ |
 | 侧边栏（sidePanel）+ popup + options 完整页 | ✅ 渲染冒烟 |
 
 ---

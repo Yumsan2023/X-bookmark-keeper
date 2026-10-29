@@ -10,7 +10,9 @@ async function set(key: string, value: unknown): Promise<void> {
 }
 
 export function mergeSettings(saved: Partial<Settings> | undefined): Settings {
-  return { ...DEFAULT_SETTINGS, ...(saved ?? {}), llm: { ...DEFAULT_SETTINGS.llm, ...(saved?.llm ?? {}) } }
+  const merged = { ...DEFAULT_SETTINGS, ...(saved ?? {}), llm: { ...DEFAULT_SETTINGS.llm, ...(saved?.llm ?? {}) } }
+  merged.theme = saved?.theme === 'light' ? 'light' : 'dark'
+  return merged
 }
 
 export async function getSettings(): Promise<Settings> {

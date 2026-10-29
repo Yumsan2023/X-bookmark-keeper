@@ -138,6 +138,7 @@ export interface AuthInfo {
 
 // ---------------- 设置 ----------------
 export type Lang = 'zh' | 'en'
+export type Theme = 'dark' | 'light'
 
 export interface LlmConfig {
   endpoint: string // OpenAI 兼容 base, 例如 https://api.openai.com/v1
@@ -151,6 +152,8 @@ export interface LlmConfig {
 
 export interface Settings {
   lang: Lang
+  /** UI theme; default dark (X-style) */
+  theme: Theme
   syncFolders: boolean
   detectDeleted: boolean
   fetchThreads: boolean
@@ -168,6 +171,7 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   lang: 'zh',
+  theme: 'dark',
   syncFolders: true,
   detectDeleted: true,
   fetchThreads: false,

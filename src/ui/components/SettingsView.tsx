@@ -48,6 +48,20 @@ export function SettingsView({ settings, save, lib }: { settings: Settings; save
           <option value="zh">中文</option><option value="en">English</option>
         </select>
       </label>
+      <label>{t('theme')}
+        <select
+          value={s.theme === 'light' ? 'light' : 'dark'}
+          onChange={async (e) => {
+            const theme = e.target.value as Settings['theme']
+            const next = { ...s, theme }
+            setS(next)
+            await save(next)
+          }}
+        >
+          <option value="dark">{t('theme_dark')}</option>
+          <option value="light">{t('theme_light')}</option>
+        </select>
+      </label>
       {check('syncFolders', 'opt_sync_folders')}
       {check('detectDeleted', 'opt_detect_deleted')}
       {check('fetchThreads', 'opt_fetch_threads')}
