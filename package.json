@@ -1,0 +1,34 @@
+{
+  "name": "bookmark-keeper",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "X (Twitter) 书签/发帖管理 Chrome MV3 扩展:同步、搜索、归类、导出",
+  "scripts": {
+    "dev": "vite build --watch",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "icons": "node scripts/gen-icons.mjs",
+    "e2e": "tsx e2e/run.ts"
+  },
+  "dependencies": {
+    "dexie": "^4.4.7",
+    "minisearch": "^7.2.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.3.7",
+    "@types/node": "^26.6.6",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^6.1.2",
+    "fake-indexeddb": "^6.2.6",
+    "puppeteer-core": "^25.16.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  }
+}

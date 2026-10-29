@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Build output — 源码仓不提交 dist；用 npm run build 生成。
+# 若要从源码加载扩展，构建后指向 dist/。发布 zip / GitHub Releases 可另含 dist。
+dist/
+
+# Archives & OS junk
+*.zip
+.DS_Store
+Thumbs.db
+
+# Env / secrets — never commit credentials
+.env
+.env.*
+!.env.example
+
+# Editor / tooling
+*.local
+.vscode/
+.idea/
+*.log
+coverage/
