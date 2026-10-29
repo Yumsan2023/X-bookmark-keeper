@@ -226,6 +226,8 @@ export const STORAGE_KEYS = {
   task: 'bk_task',
   /** Last successful full bookmark sync report meta */
   lastFullSync: 'bk_last_full_sync',
+  /** Library table visible columns (LibraryColumnId[]) */
+  libraryColumns: 'bk_library_columns',
 } as const
 
 /** 时间线帖子的本地文件夹前缀, 形如 timeline:@alice */
@@ -261,3 +263,29 @@ export interface LastFullSyncMeta {
   /** UI should open the report once (cleared after shown) */
   pendingReport?: boolean
 }
+
+/** Library table column visibility prefs (v0.4+) */
+export type LibraryColumnId =
+  | 'index'
+  | 'user'
+  | 'folder'
+  | 'post'
+  | 'media'
+  | 'views'
+  | 'reposts'
+  | 'favorites'
+  | 'replies'
+  | 'created_at'
+
+export const DEFAULT_LIBRARY_COLUMNS: LibraryColumnId[] = [
+  'index',
+  'user',
+  'folder',
+  'post',
+  'media',
+  'views',
+  'reposts',
+  'favorites',
+  'replies',
+  'created_at',
+]

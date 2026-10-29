@@ -4,18 +4,19 @@ import { useLibrary, useProgress, useSettings } from './hooks'
 import { I18nProvider, useT } from './i18n'
 import { DialogProvider } from './components/Dialogs'
 import { FoldersView, TagsView } from './components/FoldersView'
+import { LibraryView } from './components/library/LibraryView'
 import { SearchView, type SearchPreset } from './components/SearchView'
 import { SettingsView } from './components/SettingsView'
 import { ProgressBox, SyncControls, SyncView, TaskBox } from './components/SyncView'
 import { SyncReportView } from './components/SyncReportView'
 
-type Tab = 'search' | 'folders' | 'tags' | 'sync' | 'settings'
+type Tab = 'library' | 'search' | 'folders' | 'tags' | 'sync' | 'settings'
 
 function Shell({ mode }: { mode: 'full' | 'side' }) {
   const t = useT()
   const lib = useLibrary()
   const [settings, save] = useSettings()
-  const [tab, setTab] = useState<Tab>('search')
+  const [tab, setTab] = useState<Tab>(mode === 'full' ? 'library' : 'search')
   const [preset, setPreset] = useState<SearchPreset>({ nonce: 0 })
   const [reportOpen, setReportOpen] = useState(false)
   const progress = useProgress()
@@ -68,31 +69,47 @@ function Shell({ mode }: { mode: 'full' | 'side' }) {
   const openAuthor = (screenName: string) => {
     open(`from:${screenName.replace(/^@/, '')}`)
   }
-  const tabs: Tab[] = mode === 'full' ? ['search', 'folders', 'tags', 'sync', 'settings'] : ['search', 'folders', 'sync']
+  const tabs: Tab[] =
+    mode === 'full'
+      ? ['library', 'search', 'folders', 'tags', 'sync', 'settings']
+      : ['library', 'search', 'folders', 'sync']
   return (
-    <div className={`app ${mode}`}>
+    <div className={`app ${mode} theme-x-dark`}>
       <header className="topbar">
         <h1>🔖 {mode === 'full' ? t('app_title') : 'Bookmark Keeper'}</h1>
         <nav>
           {tabs.map((k) => (
-            <button key={k} className={tab === k ? 'tab active' : 'tab'} onClick={() => setTab(k)}>{t(`tab_${k}` as any)}</button>
+            <button key={k} className={tab === k ? 'tab active' : 'tab'} onClick={() => setTab(k)}>
+              {t(`tab_${k}` as any)}
+            </button>
           ))}
         </nav>
-        {mode === 'side' && <button className="tab" onClick={() => chrome.runtime.openOptionsPage()}>↗</button>}
+        {mode === 'side' && (
+          <button className="tab" onClick={() => chrome.runtime.openOptionsPage()}>
+            ↗
+          </button>
+        )}
       </header>
-      {tab !== 'sync' && tab !== 'settings' && (
+      {tab !== 'sync' && tab !== 'settings' && tab !== 'library' && (
         <div className="mini-sync">
           <SyncControls compact />
           <ProgressBox />
           <TaskBox />
         </div>
       )}
-      <main>
-        <div hidden={tab !== 'search'}><SearchView lib={lib} settings={settings} compact={mode === 'side'} preset={preset} /></div>
+      <main className={tab === 'library' ? 'main-library' : undefined}>
+        <div hidden={tab !== 'library'}>
+          <LibraryView lib={lib} settings={settings} onSync={() => setTab('sync')} />
+        </div>
+        <div hidden={tab !== 'search'}>
+          <SearchView lib={lib} settings={settings} compact={mode === 'side'} preset={preset} />
+        </div>
         {tab === 'folders' && <FoldersView lib={lib} onOpen={open} />}
         {tab === 'tags' && <TagsView lib={lib} onOpen={open} />}
         {tab === 'sync' && <SyncView onOpenReport={() => setReportOpen(true)} />}
-        {tab === 'settings' && <SettingsView key={JSON.stringify(settings)} settings={settings} save={save} lib={lib} />}
+        {tab === 'settings' && (
+          <SettingsView key={JSON.stringify(settings)} settings={settings} save={save} lib={lib} />
+        )}
       </main>
       <SyncReportView
         open={reportOpen}

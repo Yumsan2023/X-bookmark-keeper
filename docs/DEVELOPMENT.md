@@ -53,6 +53,7 @@ bookmark-keeper/
 │   ├── ai/                 # OpenAI 兼容归类
 │   ├── shared/             # types、storage
 │   └── ui/                 # React：options / sidepanel / popup / print
+│       └── components/library/  # v0.4 列表页 LibraryView + Filter/Export 面板
 ├── tests/                  # vitest + fixtures/builders（手工 GraphQL 形状）
 ├── e2e/                    # Mock X + puppeteer 冒烟
 ├── scripts/gen-icons.mjs
@@ -74,7 +75,7 @@ bookmark-keeper/
 2. **queryId**：页面学习 → 404/unknown 时扫 bundle → `DEFAULT_QUERY_IDS` 兜底。  
 3. **features**：400「features cannot be null」时自动补 `false` 并记住。  
 4. **书签 vs 发帖**：`Post.source` 为 `bookmark` | `timeline`；时间线进 `timeline:@handle`；已是书签的 id 不降级。  
-5. **大库**：UI 禁止 `toArray()` 全表开机；空查询走 Dexie 分页；全文优先持久化 MiniSearch，否则 idle 分批建索引。  
+5. **大库**：UI 禁止 `toArray()` 全表开机；空查询走 Dexie 分页；全文优先持久化 MiniSearch，否则 idle 分批建索引。 列表页（`LibraryView`）同样只走 `lib.search` / `collectAllMatching`，禁止整库 `getAllPosts` 渲染。  
 6. **测试**：单元测试用 `tests/fixtures` 构造响应；e2e 用本地 Mock，**禁止**依赖真实账号或提交抓包中的 cookie。
 
 ## 改代码时的建议落点
