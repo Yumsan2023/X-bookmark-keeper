@@ -19,10 +19,11 @@ interface Props {
   onSelect: (id: string, v: boolean) => void
   onTag: (post: Post) => void
   onNote: (post: Post) => void
+  onDelete?: (post: Post) => void
   compact?: boolean
 }
 
-export function PostCard({ post: p, terms, selected, onSelect, onTag, onNote, compact }: Props) {
+export function PostCard({ post: p, terms, selected, onSelect, onTag, onNote, onDelete, compact }: Props) {
   const t = useT()
   const lang = useLang()
   const [showThread, setShowThread] = useState(false)
@@ -81,6 +82,16 @@ export function PostCard({ post: p, terms, selected, onSelect, onTag, onNote, co
           <span className="spacer" />
           <button className="link-btn" onClick={() => onTag(p)}>🏷 {t('tag')}</button>
           <button className="link-btn" onClick={() => onNote(p)}>📝 {t('edit_note')}</button>
+          {onDelete && (
+            <button
+              type="button"
+              className="link-btn danger"
+              title={t('unbookmark_x')}
+              onClick={() => onDelete(p)}
+            >
+              🗑 {t('delete_bookmark')}
+            </button>
+          )}
           <a href={p.url} target="_blank" rel="noreferrer">{t('open_on_x')} ↗</a>
         </footer>
       </div>

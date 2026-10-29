@@ -263,7 +263,7 @@ export function LibraryView({
               title={t('unbookmark_x')}
               onClick={() => void onUnbookmark([...selected])}
             >
-              {t('unbookmark_x')}
+              🗑 {t('delete_bookmark')}
             </button>
             <button type="button" onClick={() => setSelected(new Set())}>
               {t('clear_selection')}
@@ -330,7 +330,7 @@ export function LibraryView({
               {show('favorites') && <th>{t('lib_col_favorites')}</th>}
               {show('replies') && <th>{t('lib_col_replies')}</th>}
               {show('created_at') && <th>{t('lib_col_created')}</th>}
-              <th className="lib-actions" aria-label={t('unbookmark_x')} />
+              <th className="lib-actions" aria-label={t('delete_bookmark')} />
             </tr>
           </thead>
           <tbody>
@@ -424,10 +424,10 @@ export function LibraryView({
                         type="button"
                         className="lib-row-action danger"
                         title={t('unbookmark_x')}
-                        aria-label={t('unbookmark_x')}
+                        aria-label={t('delete_bookmark')}
                         onClick={() => void onUnbookmark([p.tweet_id])}
                       >
-                        🗑
+                        🗑 {t('delete_bookmark')}
                       </button>
                     </td>
                   </tr>

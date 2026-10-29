@@ -1,6 +1,6 @@
 # Bookmark Keeper — X (Twitter) 书签管家 (Chrome MV3 扩展)
 
-**当前版本: 0.4.3** — 列表页支持批量/单条「取消 X 端书签」（与书签搜索页同流程）；保留 0.4.2 LLM 模型下拉与主题/列表页。
+**当前版本: 0.4.4** — 列表与书签（搜索）页统一「删除书签」主操作文案（批量/单条），卡片也有删除入口；流程仍走 X DeleteBookmark。
 
 把你在 X 上的**书签**与指定账号的**公开发帖**(UserTweets)同步到本地 IndexedDB，提供中英文全文搜索、文件夹/标签管理、批量操作、导出和可选的 AI 自动归类。
 
@@ -9,7 +9,7 @@
 <details>
 <summary><strong>English summary</strong></summary>
 
-Chrome MV3 extension that syncs your X (Twitter) **bookmarks** and optional public **UserTweets** timelines into local IndexedDB. v0.4.3 adds Library list bulk/single unbookmark (same DeleteBookmark flow as Search). v0.4.2 adds Settings LLM model select (common OpenAI-compatible ids + custom). v0.4.1 added light/dark theme toggle (default dark). v0.4 added an X-style library table (column toggles, filter/export panels, paginated Dexie reads). Also: Chinese/English full-text search (MiniSearch + `Intl.Segmenter`), folders/tags, bulk actions, batched export (JSON/CSV/Markdown/Obsidian), optional OpenAI-compatible AI classification. Auth is captured from your logged-in x.com tab (no official paid API). Inspired by twillot’s architecture ideas only — fully rewritten. **Not verified against real X accounts** in this repo; unit tests + Mock-X e2e only. May violate X ToS; use at your own risk. MIT License.
+Chrome MV3 extension that syncs your X (Twitter) **bookmarks** and optional public **UserTweets** timelines into local IndexedDB. v0.4.4 clarifies Delete bookmark on Library + Search (bulk/row/card); same DeleteBookmark flow. v0.4.3 added Library list bulk/single unbookmark. v0.4.2 adds Settings LLM model select (common OpenAI-compatible ids + custom). v0.4.1 added light/dark theme toggle (default dark). v0.4 added an X-style library table (column toggles, filter/export panels, paginated Dexie reads). Also: Chinese/English full-text search (MiniSearch + `Intl.Segmenter`), folders/tags, bulk actions, batched export (JSON/CSV/Markdown/Obsidian), optional OpenAI-compatible AI classification. Auth is captured from your logged-in x.com tab (no official paid API). Inspired by twillot’s architecture ideas only — fully rewritten. **Not verified against real X accounts** in this repo; unit tests + Mock-X e2e only. May violate X ToS; use at your own risk. MIT License.
 
 Step-by-step: [docs/USAGE.md](./docs/USAGE.md) · Develop: [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md) · Contribute: [CONTRIBUTING.md](./CONTRIBUTING.md)
 

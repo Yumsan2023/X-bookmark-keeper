@@ -53,6 +53,7 @@ const dict = {
   tag_prompt: { zh: '输入标签 (多个用空格或逗号分隔)', en: 'Tags (space/comma separated)' },
   new_folder_prompt: { zh: '新文件夹名称', en: 'New folder name' },
   unbookmark_x: { zh: '取消 X 端书签', en: 'Remove from X bookmarks' },
+  delete_bookmark: { zh: '删除书签', en: 'Delete bookmark' },
   confirm_unbookmark: { zh: '将在 X 上取消这些书签 (本地记录保留并标记为"已取消书签")。确定吗?', en: 'This removes these bookmarks on X (local copies are kept, marked "unbookmarked"). Continue?' },
   confirm_unbookmark_hard: { zh: '同时从本地彻底删除?', en: 'Also delete locally?' },
   fetch_threads: { zh: '抓取线程', en: 'Fetch threads' },

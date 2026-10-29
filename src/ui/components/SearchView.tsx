@@ -185,8 +185,8 @@ export function SearchView({ lib, settings, compact, preset }: { lib: Library; s
     await removeTags(sel([]), v.split(/[\s,，]+/).map(normalizeTag).filter(Boolean))
     await afterChange()
   }
-  const onUnbookmark = async () => {
-    const ids = sel([])
+  const onUnbookmark = async (idsIn?: string[]) => {
+    const ids = idsIn?.length ? idsIn : sel([])
     if (!ids.length) return
     if (settings.confirmBulkDelete && !(await confirm(`${t('confirm_unbookmark')} (${ids.length})`))) return
     const hard = await confirm(t('confirm_unbookmark_hard'))
@@ -321,7 +321,7 @@ export function SearchView({ lib, settings, compact, preset }: { lib: Library; s
           <button onClick={onRemoveTag}>{t('remove_tag')}</button>
           <button onClick={() => bg({ type: 'threads/fetch', tweetIds: [...selected] }).then(() => flash(t('task')))}>{t('fetch_threads')}</button>
           {aiVisible && <button onClick={() => void openAi('selected')}>✨ {t('ai_classify')}</button>}
-          <button className="danger" onClick={onUnbookmark}>{t('unbookmark_x')}</button>
+          <button className="danger" title={t('unbookmark_x')} onClick={() => void onUnbookmark()}>🗑 {t('delete_bookmark')}</button>
           <button className="danger" onClick={onRemoveLocal}>{t('delete')}</button>
         </div>
       )}
@@ -345,6 +345,7 @@ export function SearchView({ lib, settings, compact, preset }: { lib: Library; s
               onSelect={(id, v) => setSelected((cur) => { const n = new Set(cur); v ? n.add(id) : n.delete(id); return n })}
               onTag={setTagEdit}
               onNote={setNoteEdit}
+              onDelete={(post) => void onUnbookmark([post.tweet_id])}
               compact={compact}
             />
           ))
