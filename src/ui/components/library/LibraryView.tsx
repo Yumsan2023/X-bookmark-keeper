@@ -12,6 +12,7 @@ import {
 import { bg, type Library } from '../../hooks'
 import { useLang, useT, type Key } from '../../i18n'
 import { fmtDate, fmtNum } from '../../util'
+import { useDialogs } from '../Dialogs'
 import { ExportPanel, type ExportScope } from './ExportPanel'
 import {
   EMPTY_FILTER,
@@ -57,6 +58,7 @@ export function LibraryView({
 }) {
   const t = useT()
   const lang = useLang()
+  const { confirm } = useDialogs()
   const [query, setQuery] = useState('')
   const [debounced, setDebounced] = useState('')
   const [filter, setFilter] = useState<LibraryFilterState>(EMPTY_FILTER)
@@ -171,6 +173,16 @@ export function LibraryView({
     })
   }
 
+  const onUnbookmark = async (ids: string[]) => {
+    if (!ids.length) return
+    if (settings.confirmBulkDelete && !(await confirm(`${t('confirm_unbookmark')} (${ids.length})`))) return
+    const hard = await confirm(t('confirm_unbookmark_hard'))
+    const r = await bg({ type: 'bookmarks/delete', tweetIds: ids, removeLocal: hard })
+    flash(r.ok ? `${t('task')}…` : r.error ?? 'error')
+    setSelected(new Set())
+    await lib.reload()
+  }
+
   const visible = columns
   const show = (id: LibraryColumnId) => visible.includes(id)
 
@@ -242,6 +254,22 @@ export function LibraryView({
             </span>
           </button>
         </div>
+        {selected.size > 0 && (
+          <div className="lib-toolbar-group lib-batch">
+            <b className="muted">{t('selected')} {selected.size}</b>
+            <button
+              type="button"
+              className="danger"
+              title={t('unbookmark_x')}
+              onClick={() => void onUnbookmark([...selected])}
+            >
+              {t('unbookmark_x')}
+            </button>
+            <button type="button" onClick={() => setSelected(new Set())}>
+              {t('clear_selection')}
+            </button>
+          </div>
+        )}
         <span className="spacer" />
         <div className="lib-cols-wrap" ref={colsRef}>
           <button
@@ -302,6 +330,7 @@ export function LibraryView({
               {show('favorites') && <th>{t('lib_col_favorites')}</th>}
               {show('replies') && <th>{t('lib_col_replies')}</th>}
               {show('created_at') && <th>{t('lib_col_created')}</th>}
+              <th className="lib-actions" aria-label={t('unbookmark_x')} />
             </tr>
           </thead>
           <tbody>
@@ -390,6 +419,17 @@ export function LibraryView({
                     {show('favorites') && <td className="num">{fmtNum(p.metrics.likes)}</td>}
                     {show('replies') && <td className="num">{fmtNum(p.metrics.replies)}</td>}
                     {show('created_at') && <td className="lib-date">{fmtDate(p.created_at, lang)}</td>}
+                    <td className="lib-actions">
+                      <button
+                        type="button"
+                        className="lib-row-action danger"
+                        title={t('unbookmark_x')}
+                        aria-label={t('unbookmark_x')}
+                        onClick={() => void onUnbookmark([p.tweet_id])}
+                      >
+                        🗑
+                      </button>
+                    </td>
                   </tr>
                 )
               })

@@ -366,3 +366,12 @@ td.lib-user { display: flex; }
   .lib-format-grid { grid-template-columns: 1fr; }
   .lib-col-post { max-width: 200px; }
 }
+
+.lib-batch { align-items: center; gap: 8px; }
+.lib-actions { width: 44px; text-align: center; white-space: nowrap; }
+.lib-row-action {
+  background: transparent; border: 1px solid transparent; color: var(--muted);
+  border-radius: 8px; padding: 4px 8px; font-size: 14px; line-height: 1;
+}
+.lib-row-action:hover { background: var(--hover); color: var(--fg); border-color: var(--border); }
+.lib-row-action.danger:hover { color: var(--danger); border-color: var(--danger); }
