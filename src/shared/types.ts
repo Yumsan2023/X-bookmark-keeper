@@ -60,6 +60,11 @@ export interface Post {
   has_video: 0 | 1
   has_link: 0 | 1
   has_quote: 0 | 1
+  /**
+   * Twitter Article / article-like attachment.
+   * Optional for older records; classify falls back to URL heuristics when missing.
+   */
+  has_article?: 0 | 1
   /** 文件夹名,空字符串=未归类 */
   folder: string
   tags: string[]
@@ -219,6 +224,8 @@ export const STORAGE_KEYS = {
   printIds: 'bk_print_ids',
   rate: 'bk_rate_limit',
   task: 'bk_task',
+  /** Last successful full bookmark sync report meta */
+  lastFullSync: 'bk_last_full_sync',
 } as const
 
 /** 时间线帖子的本地文件夹前缀, 形如 timeline:@alice */
@@ -242,4 +249,15 @@ export interface TaskProgress {
   failed: number
   error?: string
   updated_at: number
+}
+
+/** Persisted after a successful full bookmark sync (for the sync report UI) */
+export interface LastFullSyncMeta {
+  at: number
+  /** Bookmarks processed/fetched in that run */
+  syncedInRun: number
+  run_id: string
+  mode: SyncMode
+  /** UI should open the report once (cleared after shown) */
+  pendingReport?: boolean
 }

@@ -24,6 +24,8 @@ export interface SyncDeps {
   loadProgress(): Promise<SyncProgress | undefined>
   saveProgress(p: SyncProgress): Promise<void>
   onDbChanged?(): Promise<void> | void
+  /** Called after a successful full bookmark sync (for report meta) */
+  onFullSyncDone?(meta: { at: number; syncedInRun: number; run_id: string; mode: SyncMode; pendingReport?: boolean }): Promise<void> | void
   /** 限流等待期间的兜底唤醒 (alarms) */
   scheduleWake?(at: number): void
   sleep?(ms: number): Promise<void>
@@ -187,6 +189,15 @@ export class SyncEngine {
       if (settings.fetchThreads) await this.syncThreads(settings)
       if (this.prog.mode === 'full' && settings.detectDeleted) await this.detectRemoved()
       await this.save({ status: 'done', phase: 'done', cursor: undefined, message: '同步完成' })
+      if (this.prog.mode === 'full') {
+        await this.deps.onFullSyncDone?.({
+          at: this.now(),
+          syncedInRun: this.prog.fetched,
+          run_id: this.prog.run_id,
+          mode: this.prog.mode,
+          pendingReport: true,
+        })
+      }
     } catch (e) {
       if (e instanceof Cancelled) {
         await this.save({ status: 'cancelled', message: '已取消 (可从断点继续)' })

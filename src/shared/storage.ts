@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, STORAGE_KEYS, type AuthInfo, type Settings, type SyncProgress } from './types'
+import { DEFAULT_SETTINGS, STORAGE_KEYS, type AuthInfo, type LastFullSyncMeta, type Settings, type SyncProgress } from './types'
 import type { QueryIdMap } from '@/api/endpoints'
 
 async function get<T>(key: string): Promise<T | undefined> {
@@ -36,3 +36,6 @@ export const saveTimelineProgress = (p: SyncProgress) => set(STORAGE_KEYS.timeli
 export async function bumpDbVersion(): Promise<void> {
   await set(STORAGE_KEYS.dbVersion, Date.now())
 }
+
+export const getLastFullSync = () => get<LastFullSyncMeta>(STORAGE_KEYS.lastFullSync)
+export const saveLastFullSync = (m: LastFullSyncMeta) => set(STORAGE_KEYS.lastFullSync, m)

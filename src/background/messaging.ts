@@ -1,6 +1,6 @@
 import { XClient } from '@/api/client'
 import { OPERATIONS } from '@/api/endpoints'
-import { getAuth, getProgress, getSettings, getTimelineProgress, saveProgress, saveTimelineProgress, bumpDbVersion } from '@/shared/storage'
+import { getAuth, getProgress, getSettings, getTimelineProgress, saveProgress, saveTimelineProgress, bumpDbVersion, saveLastFullSync } from '@/shared/storage'
 import { STORAGE_KEYS, type BgRequest, type BgResponse } from '@/shared/types'
 import { cancelTask, deleteBookmarks, fetchThreads, pushFolder } from './actions'
 import { getAllQueryIds, getQueryId, refreshQueryIds } from './queryids'
@@ -27,6 +27,7 @@ export const engine = new SyncEngine({
   loadProgress: getProgress,
   saveProgress,
   onDbChanged: bumpDbVersion,
+  onFullSyncDone: (meta) => saveLastFullSync(meta),
   scheduleWake: (at) => chrome.alarms.create('bk-resume', { when: at }),
 })
 

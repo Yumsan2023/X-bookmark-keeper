@@ -7,6 +7,8 @@ dist/
 
 # Archives & OS junk
 *.zip
+*.tar.gz
+*.tgz
 .DS_Store
 Thumbs.db
 

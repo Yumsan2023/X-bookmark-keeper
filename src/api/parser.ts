@@ -162,6 +162,19 @@ function parseQuoted(tweet: AnyObj): QuotedPost | undefined {
   return { tweet_id: id, screen_name: user.screen_name, name: user.name, text: extractText(q).text }
 }
 
+
+/** Detect Twitter Article node or article-like URLs */
+export function detectHasArticle(tweet: AnyObj, urls: string[]): 0 | 1 {
+  const article = tweet.article?.article_results?.result
+  if (article && (article.title || article.preview_text || article.rest_id)) return 1
+  for (const u of urls) {
+    const s = String(u).toLowerCase()
+    if (/\/i\/articles?\//.test(s)) return 1
+    if (/x\.com\/[^/]+\/article\//.test(s) || /twitter\.com\/[^/]+\/article\//.test(s)) return 1
+  }
+  return 0
+}
+
 /** 把一个 Tweet 节点 (已 unwrap) 转成 ParsedPost。无法识别返回 null */
 export function tweetToPost(tweet: AnyObj, sortIndex = ''): ParsedPost | null {
   const id = String(tweet.rest_id ?? tweet.legacy?.id_str ?? '')
@@ -193,6 +206,7 @@ export function tweetToPost(tweet: AnyObj, sortIndex = ''): ParsedPost | null {
     has_video: media.some((m) => m.type !== 'photo') ? 1 : 0,
     has_link: urls.length > 0 ? 1 : 0,
     has_quote: hasQuote ? 1 : 0,
+    has_article: detectHasArticle(tweet, urls),
     url: `https://x.com/${user.screen_name || 'i/web'}/status/${id}`,
   }
 }

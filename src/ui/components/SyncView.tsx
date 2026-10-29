@@ -88,7 +88,7 @@ function TimelinePanel() {
   const resumable = !!p && ['paused', 'error', 'cancelled'].includes(status) && !!p.cursor && !!p.handle
   return (
     <div className="panel" style={{ marginTop: 16 }}>
-      <h3>{t('timeline_title')} <span className="muted" style={{ fontWeight: 400, fontSize: '0.85em' }}>v0.2.0</span></h3>
+      <h3>{t('timeline_title')} <span className="muted" style={{ fontWeight: 400, fontSize: '0.85em' }}>v0.3.0</span></h3>
       <p className="muted">{t('timeline_hint')}</p>
       <p className="err" style={{ fontSize: '0.9em' }}>{t('timeline_risk')}</p>
       <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
@@ -134,7 +134,8 @@ function TimelinePanel() {
   )
 }
 
-export function SyncView() {
+export function SyncView(props: { onOpenReport?: () => void } = {}) {
+  const { onOpenReport } = props
   const t = useT()
   const auth = useAuthInfo()
   const rate = useRate()
@@ -145,13 +146,16 @@ export function SyncView() {
   }, [])
   return (
     <div className="panel">
-      <h3>{t('sync_status')} <span className="muted" style={{ fontWeight: 400, fontSize: '0.85em' }}>v0.2.0</span></h3>
+      <h3>{t('sync_status')} <span className="muted" style={{ fontWeight: 400, fontSize: '0.85em' }}>v0.3.0</span></h3>
       <p className="muted">{t('not_verified')}</p>
       <p className={auth ? 'ok' : 'err'}>
         {auth ? `✔ ${t('auth_ok')} (${new Date(auth.captured_at).toLocaleString()})` : `✘ ${t('auth_missing')}`}{' '}
         <button onClick={() => chrome.tabs.create({ url: 'https://x.com/i/bookmarks' })}>{t('open_x_bookmarks')}</button>
       </p>
       <SyncControls />
+      <div className="row wrap" style={{ marginTop: 8 }}>
+        <button onClick={() => onOpenReport?.()}>{t('report_open')}</button>
+      </div>
       <ProgressBox />
       <TaskBox />
       <TimelinePanel />

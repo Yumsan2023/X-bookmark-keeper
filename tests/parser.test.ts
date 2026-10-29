@@ -78,6 +78,19 @@ describe('parseTimelinePage', () => {
     expect(e.post.avatar).toContain('new.jpg')
   })
 
+  it('sets has_article when tweet.article node is present', () => {
+    const t = tweet({ id: '90', text: 'check article' })
+    ;(t as any).article = {
+      article_results: { result: { title: 'My Article', preview_text: 'preview', rest_id: 'art1' } },
+    }
+    const e = parseTimelinePage(bookmarksPage([tweetEntry(t, '1')])).entries[0]
+    expect(e.kind).toBe('tweet')
+    if (e.kind !== 'tweet') return
+    expect(e.post.has_article).toBe(1)
+    expect(e.post.text).toContain('My Article')
+  })
+
+
   it('parses quoted tweets', () => {
     const q = tweet({ id: '5', text: 'original', screen_name: 'carol', name: 'Carol' })
     const t = tweet({ id: '4', text: 'quoting', quoted: q })

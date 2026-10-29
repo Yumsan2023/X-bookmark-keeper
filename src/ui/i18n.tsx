@@ -172,6 +172,19 @@ const dict = {
   source_bookmark: { zh: '书签', en: 'Bookmark' },
   source_timeline: { zh: '发帖', en: 'Timeline' },
   source_filter: { zh: '来源', en: 'Source' },
+  report_open: { zh: '同步报告', en: 'Sync report' },
+  report_hero_title: { zh: '永久保存你的 X 书签', en: 'Permanently Save Your X Bookmarks' },
+  report_hero_sub: { zh: '自动备份与整理，书签永不丢失。', en: 'Never lose your bookmarked posts with automatic backup and organization.' },
+  report_title: { zh: '全量同步报告', en: 'Full sync report' },
+  report_synced_prefix: { zh: '本次同步了', en: 'Synced' },
+  report_synced_suffix: { zh: '条书签。', en: 'bookmarks in this run.' },
+  report_last_sync: { zh: '上次全量同步时间', en: 'Last full sync time' },
+  report_distribution: { zh: '内容分布', en: 'Content Distribution' },
+  report_authors: { zh: '收藏最多的作者', en: 'Most bookmarked authors' },
+  report_view_bookmarks: { zh: '查看书签 →', en: 'View bookmarks →' },
+  report_other_authors: { zh: '其他作者', en: 'Other authors' },
+  report_loading: { zh: '正在汇总…', en: 'Computing report…' },
+  report_scope_hint: { zh: '内容分布与作者排行基于当前库内 {n} 条有效书签（不含发帖时间线）。', en: 'Distribution and authors cover {n} active bookmarks in the library (timeline posts excluded).' },
 } as const
 
 export type Key = keyof typeof dict
