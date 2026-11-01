@@ -34,6 +34,20 @@
   color-scheme: dark !important;
 }
 
+[data-xsl-hover] {
+  all: initial !important;
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 2147483000 !important;
+  pointer-events: none !important;
+  display: none !important;
+  color-scheme: dark !important;
+}
+
+[data-xsl-hover][data-open="1"] {
+  display: block !important;
+}
+
 article[data-xsl-outline="spam"] {
   box-shadow: inset 3px 0 0 rgba(244, 33, 46, 0.85) !important;
 }

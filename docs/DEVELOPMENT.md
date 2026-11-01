@@ -81,6 +81,7 @@ x-toolkit/   # 仓库路径不变；包名 x-toolkit
 5. **大库**：UI 禁止 `toArray()` 全表开机；空查询走 Dexie 分页；全文优先持久化 MiniSearch，否则 idle 分批建索引。 列表页（`LibraryView`）同样只走 `lib.search` / `collectAllMatching`，禁止整库 `getAllPosts` 渲染。  
 6. **测试**：单元测试用 `tests/fixtures` 构造响应；e2e 用本地 Mock，**禁止**依赖真实账号或提交抓包中的 cookie。  
 7. **作者常营销 / 常垃圾**：唯一来源是 `chrome.storage.local` 的 `xsl`（`ledger[userId].authorFlags`，次数在 `tags`，开关在 `settings`）。书签库读 `xsl.index`。不要再写一份 `bk_*` 或 Dexie 作者表。`setAuthorFlag` 不入静音/屏蔽队列。
+8. **悬停浮卡**：只读。账本摘要来自内容脚本已经持有的 `xsl` 快照。付费合作占比只在 `partnershipRatioEnabled` 打开时，由后台用 `UserByScreenName` 与 `UserTweets` 抽样；缓存键是 `xslHoverCache`，不写进账本。禁止为这个功能新增 GraphQL mute/block。字段缺失必须是「暂无法统计」，不能显示编造的 0%。
 
 ## 改代码时的建议落点
 
@@ -94,6 +95,7 @@ x-toolkit/   # 仓库路径不变；包名 x-toolkit
 | 社区名单（黄标 / 折叠，不记账） | `strike/lib/pure.js` 的 `parseCommunityList` / `matchCommunityLists` / `communityListDecision`，选项页社区名单一节，内容脚本黄标 |
 | 导出格式 | `export/*` |
 | 一键全量备份 / 恢复 | `backup/full.ts`（格式与摘要）、`backup/io.ts`（读写）、设置页 `FullBackupPanel`。恢复整包替换；`xsl` 经后台 `REPLACE_STATE`。密钥默认不进文件 |
+| 悬停浮卡 / 付费合作占比 | `strike/lib/partnership.js`（抽样、缓存、文案）、`background/partnership.ts`（只读 UserTweets）、内容脚本 `main.js` / `view.js`。不要加 mute/block GraphQL |
 | UI 文案 | `ui/i18n.tsx` |
 | 权限 / 主机 | `public/manifest.json` |
 

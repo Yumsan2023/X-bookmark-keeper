@@ -512,6 +512,78 @@ export function openFalsePositive(shadow, model) {
   });
 }
 
+const HOVER_CSS = `
+:host { all: initial; }
+* { box-sizing: border-box; font-family: ui-sans-serif, "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif; }
+.card {
+  pointer-events: auto; position: fixed; width: min(300px, calc(100vw - 16px));
+  background: #16181c; color: #e7e9ea; border: 1px solid rgba(255,255,255,.14);
+  border-radius: 14px; box-shadow: 0 12px 36px rgba(0,0,0,.45);
+  padding: 10px 12px 8px; font-size: 12.5px; line-height: 1.45;
+}
+h3 { margin: 0; font-size: 14px; font-weight: 720; }
+.sub { margin: 1px 0 6px; color: #8b98a5; font-size: 12px; }
+.row { margin: 3px 0; }
+.quiet { color: #8b98a5; }
+.warn { color: #f0c94d; }
+.ok { color: #8ee0b0; }
+.foot { margin: 6px 0 0; color: #8b98a5; font-size: 11px; }
+`;
+
+/** Read-only author card. No buttons, so it cannot mark, queue, mute, or block. */
+export function createHoverCard() {
+  let host = document.querySelector("[data-xsl-hover]");
+  if (!host) {
+    host = document.createElement("div");
+    host.dataset.xslHover = "1";
+    document.documentElement.append(host);
+  }
+  const ready = ensureShadow(host);
+  host = ready.host;
+  const shadow = ready.shadow;
+  if (!shadow) return null;
+  if (!shadow.querySelector("style")) shadow.append(el("style", { text: HOVER_CSS }));
+  let card = shadow.querySelector(".card");
+  if (!card) {
+    card = el("div", { class: "card", role: "tooltip" });
+    shadow.append(card);
+  }
+  const place = (anchor) => {
+    const rect = anchor.getBoundingClientRect();
+    const width = card.offsetWidth || 280;
+    const height = card.offsetHeight || 140;
+    let left = rect.left;
+    if (left + width > window.innerWidth - 8) left = window.innerWidth - width - 8;
+    if (left < 8) left = 8;
+    let top = rect.bottom + 6;
+    if (top + height > window.innerHeight - 8) top = Math.max(8, rect.top - height - 6);
+    card.style.left = `${Math.round(left)}px`;
+    card.style.top = `${Math.round(top)}px`;
+  };
+  return {
+    host,
+    isOpen() {
+      return host.dataset.open === "1";
+    },
+    show(model, anchor) {
+      if (!model || !anchor) return;
+      card.replaceChildren();
+      card.append(el("h3", { text: model.title || "" }));
+      if (model.subtitle) card.append(el("div", { class: "sub", text: model.subtitle }));
+      for (const row of model.rows || []) {
+        const tone = row?.tone === "quiet" || row?.tone === "warn" || row?.tone === "ok" ? row.tone : "";
+        card.append(el("div", { class: tone ? `row ${tone}` : "row", text: row?.text || "" }));
+      }
+      if (model.footnote) card.append(el("div", { class: "foot", text: model.footnote }));
+      host.dataset.open = "1";
+      place(anchor);
+    },
+    hide() {
+      delete host.dataset.open;
+    },
+  };
+}
+
 export function toast(shadow, text) {
   if (!shadow) return;
   let node = shadow.querySelector(".toast");
