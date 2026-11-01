@@ -43,6 +43,7 @@ import {
   searchLedger,
   seenAccount,
   setHidden,
+  setAuthorFlag,
   setWhitelist,
   snippet,
   statsOf,
@@ -247,6 +248,9 @@ export function dispatch(message, sender = {}) {
         break;
       case "SET_WHITELIST":
         result = setWhitelist(state, message, now);
+        break;
+      case "SET_AUTHOR_FLAG":
+        result = setAuthorFlag(state, message, now);
         break;
       case "SET_HIDDEN":
         result = setHidden(state, message, now);

@@ -6,7 +6,12 @@
  *   has:image|video|link|quote|media
  *   tag:xxx     is:deleted|unbookmarked|active
  *   source:bookmark|timeline
+ *   author:marketing|spam|常营销|常垃圾   strike:spam|marketing|any
+ *   -author:marketing 排除该芯片
  */
+import { authorMarkKind } from '@/strike/lib/author-flags.js'
+
+export type AuthorMarkKind = 'marketing' | 'spam' | 'any'
 export type HasKind = 'image' | 'video' | 'link' | 'quote' | 'media'
 export type StatusFilter = 'active' | 'tweet_deleted' | 'unbookmarked'
 export type SourceFilter = 'bookmark' | 'timeline'
@@ -23,6 +28,9 @@ export interface ParsedQuery {
   tags: string[]
   status?: StatusFilter
   source?: SourceFilter
+  /** author: / strike: chips. Multiple tokens are AND. */
+  authorMarks: AuthorMarkKind[]
+  excludeAuthorMarks: AuthorMarkKind[]
   warnings: string[]
 }
 
@@ -83,7 +91,18 @@ export function parseDateToken(s: string): { start: number; end: number } | null
 }
 
 export function parseQuery(input: string): ParsedQuery {
-  const q: ParsedQuery = { terms: [], phrases: [], excludes: [], from: [], folders: [], has: [], tags: [], warnings: [] }
+  const q: ParsedQuery = {
+    terms: [],
+    phrases: [],
+    excludes: [],
+    from: [],
+    folders: [],
+    has: [],
+    tags: [],
+    authorMarks: [],
+    excludeAuthorMarks: [],
+    warnings: [],
+  }
   for (const raw of splitTokens(input ?? '')) {
     let tok = raw
     let negate = false
@@ -91,8 +110,8 @@ export function parseQuery(input: string): ParsedQuery {
       negate = true
       tok = tok.slice(1)
     }
-    const m = /^(from|since|until|folder|has|tag|is|source):(.*)$/i.exec(tok)
-    if (m && !negate) {
+    const m = /^(from|since|until|folder|has|tag|is|source|author|strike):(.*)$/i.exec(tok)
+    if (m && (!negate || m[1].toLowerCase() === 'author' || m[1].toLowerCase() === 'strike')) {
       const key = m[1].toLowerCase()
       const val = unquote(m[2])
       if (!val) continue
@@ -141,6 +160,14 @@ export function parseQuery(input: string): ParsedQuery {
           if (v === 'bookmark' || v === 'bookmarks') q.source = 'bookmark'
           else if (v === 'timeline' || v === 'tweets' || v === 'posts') q.source = 'timeline'
           else q.warnings.push(`source:${val}`)
+          break
+        }
+        case 'author':
+        case 'strike': {
+          const kind = authorMarkKind(val) as AuthorMarkKind | ''
+          if (!kind) q.warnings.push(`${key}:${val}`)
+          else if (negate) q.excludeAuthorMarks.push(kind)
+          else q.authorMarks.push(kind)
           break
         }
       }

@@ -424,6 +424,8 @@ async function openTags(article) {
     queueMute: settings.enablePlatformActions ? t("queueMute") : "",
     queueBlock: settings.enablePlatformActions ? t("queueBlock") : "",
     cancel: t("cancel"),
+    libraryFlagLabel: t("libraryFlagToggle"),
+    libraryFlagHint: t("libraryFlagHint"),
     keyword: {
       word: selectedIn(article),
       packs: (settings.keywordPacks || []).map((pack) => ({ id: pack.id, name: pack.name })),
@@ -463,7 +465,23 @@ async function openTags(article) {
     if (queued?.ok) pump();
     return;
   }
-  if (action.type === "toggle") await toggleTag(meta, action.tag);
+  if (action.type === "toggle") {
+    const clean = canonicalTag(action.tag);
+    const wasOn = tweetTags(meta.tweetId).includes(clean);
+    await toggleTag(meta, action.tag);
+    if (!wasOn && action.libraryFlag && (clean === "Spam" || clean === "Marketing")) {
+      const saved = await send({
+        type: "SET_AUTHOR_FLAG",
+        userId: meta.userId,
+        handle: meta.handle,
+        displayName: meta.displayName,
+        flag: clean === "Spam" ? "spam" : "marketing",
+        value: true,
+        addStrike: false,
+      });
+      if (saved?.ok) toast(overlay, t("libraryFlagSaved", { handle: meta.handle }));
+    }
+  }
   if (action.type === "add") {
     const added = await send({ type: "ADD_CUSTOM_TAG", name: action.name });
     if (!added.ok) {

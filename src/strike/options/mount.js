@@ -69,9 +69,10 @@ export async function mountStrikeOptions(root) {
     $("#language").value = draft.language;
     $("#defaultThreshold").value = draft.defaultThreshold;
     root.querySelector(`input[name="actionMode"][value="${draft.actionMode}"]`).checked = true;
-    for (const id of ["hideOnThreshold", "muteOnThreshold", "blockOnThreshold", "enablePlatformActions", "rulesEnabled", "hitHistory"]) {
+    for (const id of ["hideOnThreshold", "muteOnThreshold", "blockOnThreshold", "enablePlatformActions", "rulesEnabled", "hitHistory", "libraryChipFromStrikes", "bookmarkMarkAddsStrike"]) {
       $(`#${id}`).checked = !!draft[id];
     }
+    $("#libraryChipThreshold").value = draft.libraryChipThreshold ?? 3;
     $("#dailyCap").value = draft.dailyCap;
     $("#rateLimitMs").value = draft.rateLimitMs;
     $("#shortcut-spam").textContent = draft.shortcuts.spam;
@@ -425,9 +426,10 @@ export async function mountStrikeOptions(root) {
     draft.language = $("#language").value;
     draft.defaultThreshold = Number($("#defaultThreshold").value);
     draft.actionMode = root.querySelector('input[name="actionMode"]:checked')?.value || "confirm";
-    for (const id of ["hideOnThreshold", "muteOnThreshold", "blockOnThreshold", "enablePlatformActions", "rulesEnabled", "hitHistory"]) {
+    for (const id of ["hideOnThreshold", "muteOnThreshold", "blockOnThreshold", "enablePlatformActions", "rulesEnabled", "hitHistory", "libraryChipFromStrikes", "bookmarkMarkAddsStrike"]) {
       draft[id] = $(`#${id}`).checked;
     }
+    draft.libraryChipThreshold = Number($("#libraryChipThreshold").value);
     draft.dailyCap = Number($("#dailyCap").value);
     draft.rateLimitMs = Number($("#rateLimitMs").value);
     draft.ai = {

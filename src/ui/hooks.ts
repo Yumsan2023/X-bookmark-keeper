@@ -4,6 +4,7 @@ import { countUnfiled } from '@/db/query'
 import { SearchEngine } from '@/search/engine'
 import { buildIndexBatched, searchPage, tryLoadPersistedIndex, type PagedSearchInput, type PagedSearchResult } from '@/search/service'
 import { getAuth, getSettings, mergeSettings } from '@/shared/storage'
+import { authorLinkSettings, authorMarkLookup } from '@/strike/lib/author-flags.js'
 import { DEFAULT_SETTINGS, STORAGE_KEYS, type BgRequest, type BgResponse, type Folder, type Post, type Settings, type SyncProgress, type TaskProgress } from '@/shared/types'
 
 export async function bg<T = unknown>(msg: BgRequest): Promise<BgResponse<T>> {
@@ -37,6 +38,23 @@ export function useSettings(): [Settings, (s: Settings) => Promise<void>] {
     await chrome.storage.local.set({ [STORAGE_KEYS.settings]: next })
   }, [])
   return [s ?? DEFAULT_SETTINGS, save]
+}
+
+/** Strike ledger author flags (`xsl`). Same record the timeline writes. */
+export function useAuthorMarks() {
+  const raw = useStorageKey<{ settings?: Record<string, unknown>; index?: Record<string, unknown> } | undefined>('xsl', undefined)
+  return useMemo(() => {
+    const settings = authorLinkSettings(raw?.settings) as {
+      libraryChipFromStrikes: boolean
+      libraryChipThreshold: number
+      bookmarkMarkAddsStrike: boolean
+    }
+    const lookup = authorMarkLookup(raw?.index ?? {}, raw?.settings) as {
+      byUserId: Map<string, unknown>
+      byHandle: Map<string, unknown>
+    }
+    return { settings, lookup }
+  }, [raw])
 }
 
 export const useProgress = () => useStorageKey<SyncProgress | undefined>(STORAGE_KEYS.progress, undefined)

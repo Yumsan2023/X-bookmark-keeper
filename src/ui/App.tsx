@@ -126,7 +126,7 @@ function Shell({ mode }: { mode: 'full' | 'side' }) {
             <span className="sidebar-logo">🔖</span>
             <div>
               <div className="sidebar-title">{t('app_title')}</div>
-              <div className="sidebar-ver muted">v0.7.5 · {t('app_subtitle')}</div>
+              <div className="sidebar-ver muted">v0.7.6 · {t('app_subtitle')}</div>
             </div>
           </div>
           <nav className="sidebar-nav">

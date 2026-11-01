@@ -3,7 +3,16 @@
  * No chrome.* and no DOM so Node tests and the service worker share one implementation.
  * Strike counts change only through applyMark / import / undo — never through
  * matchRules, addKeywordToPack, addDistilledRules, or recordRuleHits.
+ * setAuthorFlag may call applyMark when bookmarkMarkAddsStrike is on, and
+ * never enqueues mute or block. Author flags live on ledger[userId].authorFlags
+ * inside chrome.storage.local `xsl` (see author-flags.js).
  */
+
+import {
+  emptyAuthorFlags,
+  libraryMarksForAccount,
+  normalizeAuthorFlags,
+} from "./author-flags.js";
 
 export const SCHEMA = 1;
 export const PRODUCT = "x-strike-ledger";
@@ -350,6 +359,12 @@ export function defaultSettings() {
     },
     customTags: [],
     keywordPacks: defaultKeywordPacks(),
+    /** Library chip when Spam/Marketing counts reach libraryChipThreshold. */
+    libraryChipFromStrikes: true,
+    /** Separate from tagThresholds (those still gate mute/block). */
+    libraryChipThreshold: 3,
+    /** Bookmark "mark author" also records one strike. Off: chip only, no queue. */
+    bookmarkMarkAddsStrike: false,
   };
 }
 
@@ -1202,6 +1217,9 @@ export function sanitizeSettings(prev, patch) {
   }
   if (src.dailyCap != null) base.dailyCap = clampInt(src.dailyCap, 1, 500, base.dailyCap);
   if (src.rateLimitMs != null) base.rateLimitMs = clampInt(src.rateLimitMs, 1000, 10000, base.rateLimitMs);
+  if (typeof src.libraryChipFromStrikes === "boolean") base.libraryChipFromStrikes = src.libraryChipFromStrikes;
+  if (typeof src.bookmarkMarkAddsStrike === "boolean") base.bookmarkMarkAddsStrike = src.bookmarkMarkAddsStrike;
+  if (src.libraryChipThreshold != null) base.libraryChipThreshold = clampInt(src.libraryChipThreshold, 1, 99, base.libraryChipThreshold || 3);
   if (src.tagThresholds && typeof src.tagThresholds === "object") {
     const next = { ...base.tagThresholds };
     for (const [name, value] of Object.entries(src.tagThresholds)) {
@@ -1277,6 +1295,7 @@ function ensureAccount(state, input, now) {
       displayName: sanitizeName(input.displayName),
       tags: [],
       whitelist: false,
+      authorFlags: emptyAuthorFlags(),
       followed: input.followed === true ? true : input.followed === false ? false : null,
       updatedAt: now,
     };
@@ -1322,6 +1341,7 @@ export function rebuildIndex(state) {
       whitelist: !!account.whitelist,
       followed: account.followed === true ? true : account.followed === false ? false : null,
       hidden: !!state.hidden[account.userId],
+      authorFlags: normalizeAuthorFlags(account.authorFlags),
       counts,
       updatedAt: account.updatedAt,
     };
@@ -1334,6 +1354,7 @@ export function rebuildIndex(state) {
       whitelist: false,
       followed: null,
       hidden: true,
+      authorFlags: emptyAuthorFlags(),
       counts: {},
       updatedAt: hidden.hiddenAt,
     };
@@ -1372,6 +1393,7 @@ export function publicAccount(account) {
       })),
     })),
     whitelist: !!account.whitelist,
+    authorFlags: normalizeAuthorFlags(account.authorFlags),
     followed: account.followed === true ? true : account.followed === false ? false : null,
     updatedAt: account.updatedAt,
   };
@@ -1529,6 +1551,100 @@ export function setWhitelist(state, input, now) {
   pushUndo(state, { id: uid("undo"), kind: "whitelist", userId, handle: account.handle, from, to, at: now });
   rebuildIndex(state);
   return { ok: true, changed: true, account: publicAccount(account) };
+}
+
+function preferredUserId(input) {
+  const handle = sanitizeHandle(input.handle);
+  const given = String(input.userId || "").trim().slice(0, 80);
+  if (/^[0-9]{2,25}$/.test(given)) return given;
+  if (/^h:[A-Za-z0-9_]{1,15}$/.test(given)) return `h:${given.slice(2).toLowerCase()}`;
+  if (handle) return accountIdFromHandle(handle);
+  if (/^[\w:.-]{2,80}$/.test(given)) return given;
+  return "";
+}
+
+function locateAccount(state, input) {
+  const handle = sanitizeHandle(input.handle);
+  const givenId = String(input.userId || "").trim();
+  if (givenId && state.ledger[givenId]) return state.ledger[givenId];
+  if (handle) {
+    const synthetic = state.ledger[accountIdFromHandle(handle)];
+    if (synthetic) return synthetic;
+    const found = Object.values(state.ledger).find((account) => sanitizeHandle(account.handle).toLowerCase() === handle.toLowerCase());
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * Pin or clear an author-level library flag.
+ * addStrike is honored only when settings.bookmarkMarkAddsStrike is on, and
+ * then only through applyMark (one tweet). This function never touches state.queue.
+ */
+export function setAuthorFlag(state, input, now) {
+  const flag = input?.flag === "spam" ? "spam" : input?.flag === "marketing" ? "marketing" : "";
+  if (!flag) return { ok: false, error: "bad-flag", enqueued: false, queued: false };
+  const handle = sanitizeHandle(input.handle);
+  const queueBefore = state.queue.length;
+  let account = locateAccount(state, input);
+  if (!account) {
+    const userId = preferredUserId(input);
+    if (!userId) return { ok: false, error: "no-handle", enqueued: false, queued: false };
+    account = ensureAccount(state, { ...input, userId, handle }, now);
+  } else {
+    if (handle) account.handle = handle;
+    if (input.displayName) account.displayName = sanitizeName(input.displayName);
+  }
+  if (!account) return { ok: false, error: "no-handle", enqueued: false, queued: false };
+  if (!account.authorFlags) account.authorFlags = emptyAuthorFlags();
+  const from = !!account.authorFlags[flag];
+  const to = !!input.value;
+  if (from !== to) {
+    account.authorFlags[flag] = to;
+    account.updatedAt = now;
+    pushUndo(state, {
+      id: uid("undo"),
+      kind: "author-flag",
+      userId: account.userId,
+      handle: account.handle,
+      flag,
+      tag: flag,
+      from,
+      to,
+      at: now,
+    });
+  }
+  let strikeAdded = false;
+  const wantStrike = to && input.addStrike === true && state.settings.bookmarkMarkAddsStrike === true;
+  if (wantStrike) {
+    const tag = flag === "spam" ? "Spam" : "Marketing";
+    const tweetId = String(input.tweetId || "").trim();
+    if (/^[A-Za-z0-9_-]{2,40}$/.test(tweetId) && account.handle) {
+      const strike = applyMark(state, {
+        tag,
+        handle: account.handle,
+        userId: account.userId,
+        displayName: account.displayName,
+        tweetId,
+        url: input.url,
+        textSnippet: input.textSnippet,
+        source: "library",
+      }, now);
+      strikeAdded = !!(strike?.ok && !strike.already);
+    }
+  }
+  if (state.queue.length !== queueBefore) state.queue = state.queue.slice(0, queueBefore);
+  rebuildIndex(state);
+  return {
+    ok: true,
+    changed: from !== to || strikeAdded,
+    userId: account.userId,
+    account: publicAccount(account),
+    marks: libraryMarksForAccount(account, state.settings),
+    strikeAdded,
+    enqueued: false,
+    queued: false,
+  };
 }
 
 export function setHidden(state, input, now) {
@@ -1836,6 +1952,13 @@ export function applyUndo(state, now) {
       account.whitelist = !!entry.from;
       account.updatedAt = now;
     }
+  } else if (entry.kind === "author-flag") {
+    const account = state.ledger[entry.userId];
+    if (account && (entry.flag === "marketing" || entry.flag === "spam")) {
+      if (!account.authorFlags) account.authorFlags = emptyAuthorFlags();
+      account.authorFlags[entry.flag] = !!entry.from;
+      account.updatedAt = now;
+    }
   } else if (entry.kind === "platform") {
     const reverse = oppositeAction(entry.action);
     const queued = enqueue(state, { userId: entry.userId, handle: entry.handle, type: reverse, source: "undo" }, now);
@@ -2051,6 +2174,7 @@ function normalizeAccount(raw, now) {
     displayName: sanitizeName(raw.displayName),
     tags,
     whitelist: !!raw.whitelist,
+    authorFlags: normalizeAuthorFlags(raw.authorFlags),
     followed: raw.followed === true ? true : raw.followed === false ? false : null,
     updatedAt: timeOf(raw.updatedAt, now),
   };
@@ -2116,6 +2240,12 @@ export function importData(state, payload, options, now) {
       local.displayName = account.displayName || local.displayName;
       local.handle = account.handle || local.handle;
       local.whitelist = local.whitelist || account.whitelist;
+      const localFlags = normalizeAuthorFlags(local.authorFlags);
+      const incomingFlags = normalizeAuthorFlags(account.authorFlags);
+      local.authorFlags = {
+        marketing: localFlags.marketing || incomingFlags.marketing,
+        spam: localFlags.spam || incomingFlags.spam,
+      };
       if (account.followed === true) local.followed = true;
       else if (local.followed == null) local.followed = account.followed;
       const names = new Set([...local.tags.map((tag) => tag.name), ...account.tags.map((tag) => tag.name)]);

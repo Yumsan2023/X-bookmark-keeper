@@ -23,7 +23,7 @@ export interface PageResult {
 }
 
 function emptyParsed(): ParsedQuery {
-  return { terms: [], phrases: [], excludes: [], from: [], folders: [], has: [], tags: [], warnings: [] }
+  return { terms: [], phrases: [], excludes: [], from: [], folders: [], has: [], tags: [], authorMarks: [], excludeAuthorMarks: [], warnings: [] }
 }
 
 function comparator(sort: SortKey): (a: Post, b: Post) => number {
@@ -124,7 +124,10 @@ export async function pagePostsNoText(opts: PageOpts): Promise<PageResult> {
       (filters.tags?.length ?? 0) +
       (filters.status && filters.status !== 'all' ? 1 : 0) +
       (filters.since != null || filters.until != null ? 1 : 0) +
-      (filters.accounts?.length ?? 0) >
+      (filters.accounts?.length ?? 0) +
+      (parsed.authorMarks?.length ?? 0) +
+      (parsed.excludeAuthorMarks?.length ?? 0) +
+      (filters.authorMarks?.length ?? 0) >
     0
 
   const ord = orderSpec(sort)
