@@ -2,7 +2,9 @@
  * Pure ledger, rule, and shortcut logic.
  * No chrome.* and no DOM so Node tests and the service worker share one implementation.
  * Strike counts change only through applyMark / import / undo — never through
- * matchRules, addKeywordToPack, addDistilledRules, or recordRuleHits.
+ * matchRules, addKeywordToPack, addDistilledRules, recordRuleHits,
+ * applyFalsePositive, or undoVeto. A false-positive veto only cools a keyword
+ * or stores a local exception. It does not unmark, enqueue, mute, or block.
  * setAuthorFlag may call applyMark when bookmarkMarkAddsStrike is on, and
  * never enqueues mute or block. Author flags live on ledger[userId].authorFlags
  * inside chrome.storage.local `xsl` (see author-flags.js).
@@ -27,6 +29,8 @@ export const HIT_LOG_CAP = 40;
 export const QUEUE_MAX = 100;
 export const QUEUE_ATTEMPTS = 4;
 export const AI_CACHE_CAP = 400;
+export const VETO_CAP = 40;
+const VETO_DAY_MS = 86_400_000;
 export const INFLIGHT_MS = 45_000;
 /** Extra wait on top of the configured gap. Always at least one second. */
 export const ACTION_JITTER_MIN_MS = 1000;
@@ -444,6 +448,11 @@ export function defaultSettings() {
     libraryChipThreshold: 3,
     /** Bookmark "mark author" also records one strike. Off: chip only, no queue. */
     bookmarkMarkAddsStrike: false,
+    /**
+     * Days a false-positive veto cools the matched keyword.
+     * 0 = stay off until the user undoes it. Does not expire exceptions.
+     */
+    vetoCooldownDays: 14,
   };
 }
 
@@ -459,6 +468,7 @@ export function freshState(now = Date.now()) {
     undo: [],
     aiCache: {},
     hitLog: [],
+    vetoes: [],
     rate: { day: localDay(now), count: 0, nextAllowed: 0, paused: false, backoffUntil: 0, lastError: "", rateStrikes: 0 },
     index: {},
     tweetTags: {},
@@ -623,13 +633,8 @@ function fieldText(target, ctx) {
   return [ctx.text, ctx.handle, ctx.bio].filter(Boolean).join("\n");
 }
 
-/**
- * Yellow-chip matching only. This function does not receive the ledger and
- * must not be wired to a counter.
- */
-export function matchRules(packs, ctx) {
-  const reasons = [];
-  const tags = [];
+function collectRuleHits(packs, ctx) {
+  const hits = [];
   for (const pack of packs || []) {
     if (!pack || pack.enabled === false) continue;
     for (const pattern of pack.patterns || []) {
@@ -638,8 +643,9 @@ export function matchRules(packs, ctx) {
       const target = pattern.target || "any";
       const hay = fieldText(target, ctx || {});
       if (!hay) continue;
+      const patternType = pattern.type === "regex" ? "regex" : "keyword";
       let hit = false;
-      if (pattern.type === "regex") {
+      if (patternType === "regex") {
         try {
           hit = compileRegex(value).test(hay.slice(0, 2000));
         } catch {
@@ -649,17 +655,109 @@ export function matchRules(packs, ctx) {
         hit = fold(hay).includes(fold(value));
       }
       if (!hit) continue;
-      reasons.push({
+      hits.push({
         packId: pack.id,
         packName: pack.name,
         suggestTag: canonicalTag(pack.suggestTag) || "",
-        pattern: value.slice(0, 80),
+        pattern: value,
+        patternType,
         target,
       });
-      const tag = canonicalTag(pack.suggestTag);
-      if (tag && !tags.includes(tag)) tags.push(tag);
-      break;
     }
+  }
+  return hits;
+}
+
+function vetoTargetsMatch(veto, pattern) {
+  const vetoTarget = veto?.target || "any";
+  const patternTarget = pattern?.target || "any";
+  return vetoTarget === patternTarget || vetoTarget === "any" || patternTarget === "any";
+}
+
+function patternEqualsVeto(pattern, veto) {
+  if (!veto?.pattern) return false;
+  const type = pattern?.patternType === "regex" || pattern?.type === "regex" ? "regex" : "keyword";
+  const vetoType = veto.patternType === "regex" ? "regex" : "keyword";
+  if (type !== vetoType) return false;
+  if (!vetoTargetsMatch(veto, pattern)) return false;
+  if (veto.packId && pattern.packId && veto.packId !== pattern.packId) return false;
+  if (vetoType === "regex") return String(pattern.pattern || pattern.value || "") === String(veto.pattern);
+  return fold(pattern.pattern || pattern.value || "") === fold(veto.pattern);
+}
+
+export function vetoActive(veto, now = Date.now()) {
+  if (!veto || typeof veto !== "object") return false;
+  const until = Number(veto.until);
+  if (!until) return true;
+  return until > now;
+}
+
+function exceptionCovers(veto, ctx) {
+  const phrase = fold(collapse(veto?.phrase));
+  if (phrase.length < 2) return false;
+  const hay = fold([ctx?.text, ctx?.bio].filter(Boolean).join("\n"));
+  if (!hay.includes(phrase)) return false;
+  if (veto.phraseScope === "any") return true;
+  const want = sanitizeHandle(veto.handle).toLowerCase();
+  const got = sanitizeHandle(ctx?.handle).toLowerCase();
+  return !!want && want === got;
+}
+
+/**
+ * "hard" drops the pattern. "soft" is a cool-down: it counts only when some
+ * other pattern still matches (higher confidence). Empty means the pattern stands.
+ */
+function suppressionFor(hit, vetoes, ctx, now) {
+  let soft = false;
+  for (const veto of vetoes || []) {
+    if (!vetoActive(veto, now)) continue;
+    if (veto.kind === "ai") continue;
+    if (veto.kind === "exception") {
+      if (!exceptionCovers(veto, ctx)) continue;
+      if (!veto.pattern || patternEqualsVeto(hit, veto)) return "hard";
+      continue;
+    }
+    if (veto.kind && veto.kind !== "rule") continue;
+    if (!patternEqualsVeto(hit, veto)) continue;
+    if (!Number(veto.until)) return "hard";
+    soft = true;
+  }
+  return soft ? "soft" : "";
+}
+
+/**
+ * Yellow-chip matching only. This function does not receive the ledger and
+ * must not be wired to a counter. Optional `ctx.vetoes` cool a keyword or
+ * apply a local exception; they never change a strike count.
+ */
+export function matchRules(packs, ctx) {
+  const now = Number.isFinite(Number(ctx?.now)) ? Number(ctx.now) : Date.now();
+  const vetoes = Array.isArray(ctx?.vetoes) ? ctx.vetoes : [];
+  const tagged = collectRuleHits(packs, ctx).map((hit) => ({
+    hit,
+    mode: suppressionFor(hit, vetoes, ctx, now),
+  }));
+  const anyFirm = tagged.some((row) => row.mode === "");
+  const byPack = new Map();
+  for (const row of tagged) {
+    if (row.mode === "hard") continue;
+    if (row.mode === "soft" && !anyFirm) continue;
+    const prev = byPack.get(row.hit.packId);
+    if (!prev || (prev.mode === "soft" && row.mode === "")) byPack.set(row.hit.packId, row);
+  }
+  const reasons = [];
+  const tags = [];
+  for (const row of byPack.values()) {
+    const reason = {
+      packId: row.hit.packId,
+      packName: row.hit.packName,
+      suggestTag: row.hit.suggestTag,
+      pattern: String(row.hit.pattern).slice(0, 80),
+      target: row.hit.target,
+    };
+    if (row.mode === "soft") reason.cooled = true;
+    reasons.push(reason);
+    if (row.hit.suggestTag && !tags.includes(row.hit.suggestTag)) tags.push(row.hit.suggestTag);
   }
   return { suspect: reasons.length > 0, tags, reasons };
 }
@@ -1119,6 +1217,96 @@ export function distillSuggestion(input) {
   return { ok: true, rules };
 }
 
+function phraseHitsBlocked(phrase, blocked) {
+  const folded = fold(phrase);
+  return blocked.some((item) => item === folded || item.includes(folded) || folded.includes(item));
+}
+
+/**
+ * One short allowlist phrase that literally occurs in the post and is not a
+ * matched spam keyword (or a piece of one). Nothing here reads the ledger.
+ */
+export function distillException(input) {
+  const text = clip(input?.text, 2000);
+  const bio = clip(input?.bio, 500);
+  const fields = { text, bio, handle: "" };
+  const blocked = [];
+  for (const raw of input?.blocked || []) {
+    const value = fold(collapse(raw));
+    if (value.length >= 2) blocked.push(value);
+  }
+  const packWords = [];
+  for (const pack of input?.packs || []) {
+    if (!pack || pack.enabled === false) continue;
+    for (const pattern of pack.patterns || []) {
+      if (pattern?.type === "regex") continue;
+      const value = fold(collapse(pattern?.value));
+      if (value.length >= 2) packWords.push(value);
+    }
+  }
+  const seen = new Set();
+  const candidates = [];
+  const push = (raw) => {
+    const collapsed = collapse(raw);
+    if (collapsed.length < 2 || collapsed.length > 24) return;
+    if (!/[\p{L}\p{N}]/u.test(collapsed) || isStop(collapsed)) return;
+    const field = findField(collapsed, fields);
+    if (field !== "text" && field !== "bio") return;
+    if (phraseHitsBlocked(collapsed, blocked)) return;
+    const key = fold(collapsed);
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push({
+      value: collapsed,
+      field,
+      length: [...collapsed].length,
+      generic: phraseHitsBlocked(collapsed, packWords),
+    });
+  };
+  const harvest = (sourceText) => {
+    const source = String(sourceText || "");
+    for (const quote of quoteSpans(source)) push(quote);
+    for (const match of source.matchAll(/#([\p{L}\p{N}_]{3,24})/gu)) push(match[1]);
+    for (const run of source.match(/[\p{Script=Han}]{2,40}/gu) || []) {
+      const chars = [...run];
+      const max = Math.min(12, chars.length);
+      for (let size = max; size >= 2; size -= 1) {
+        for (let start = 0; start + size <= chars.length; start += 1) {
+          push(chars.slice(start, start + size).join(""));
+        }
+      }
+    }
+    const words = collapse(source).match(/[A-Za-z][A-Za-z0-9']{2,}/g) || [];
+    for (let size = Math.min(4, words.length); size >= 2; size -= 1) {
+      for (let index = 0; index + size <= words.length; index += 1) {
+        push(words.slice(index, index + size).join(" "));
+      }
+    }
+    for (const word of words) {
+      if (word.length >= 4) push(word);
+    }
+  };
+  harvest(text);
+  harvest(bio);
+  const ranked = candidates
+    .filter((item) => !item.generic)
+    .sort((a, b) => b.length - a.length || (a.field === b.field ? a.value.localeCompare(b.value) : a.field === "text" ? -1 : 1));
+  return { ok: true, phrase: ranked[0]?.value || "" };
+}
+
+export function suggestionHash(input) {
+  const handle = sanitizeHandle(input?.handle);
+  const text = snippet(input?.text, 500);
+  const bio = snippet(input?.bio, 280);
+  return contentHash([handle, bio, text]);
+}
+
+export function aiSuggestionDismissed(vetoes, hash, now = Date.now()) {
+  const key = String(hash || "");
+  if (!key) return false;
+  return (vetoes || []).some((veto) => veto?.hash === key && veto.source === "ai" && vetoActive(veto, now));
+}
+
 export function suggestPackId(packs, label) {
   const list = Array.isArray(packs) ? packs : [];
   const enabled = list.filter((pack) => pack && pack.id && pack.enabled !== false);
@@ -1197,6 +1385,314 @@ export function addDistilledRules(state, input) {
     count: added.length,
     duplicate: added.length === 0 && duplicates.length > 0,
     stopped,
+  };
+}
+
+function cleanVetoItem(raw) {
+  const patternType = raw?.patternType === "regex" || raw?.type === "regex" ? "regex" : "keyword";
+  const target = KEYWORD_TARGETS.includes(raw?.target) ? raw.target : "";
+  if (!target) return null;
+  const pattern = String(raw?.pattern ?? raw?.value ?? "").trim().slice(0, patternType === "regex" ? 180 : 80);
+  if (!pattern) return null;
+  if (patternType === "regex") {
+    try {
+      compileRegex(pattern);
+    } catch {
+      return null;
+    }
+  } else if (!/[\p{L}\p{N}]/u.test(pattern)) {
+    return null;
+  }
+  return {
+    packId: String(raw?.packId || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40),
+    packName: snippet(raw?.packName, 40),
+    pattern,
+    patternType,
+    target,
+  };
+}
+
+function vetoItemKey(item) {
+  const type = item?.patternType === "regex" ? "regex" : "keyword";
+  const value = type === "regex" ? String(item?.pattern || "") : fold(item?.pattern || "");
+  return `${item?.packId || ""}|${type}|${item?.target || "any"}|${value}`;
+}
+
+function locatePatterns(packs, rule) {
+  const out = [];
+  for (const pack of packs || []) {
+    if (!pack?.id) continue;
+    for (const pattern of pack.patterns || []) {
+      const type = pattern?.type === "regex" ? "regex" : "keyword";
+      if (type !== rule.type) continue;
+      const target = KEYWORD_TARGETS.includes(pattern?.target) ? pattern.target : "any";
+      const ruleTarget = rule.target || "any";
+      if (target !== ruleTarget && target !== "any" && ruleTarget !== "any") continue;
+      if (type === "regex") {
+        if (String(pattern.value) !== String(rule.value)) continue;
+      } else if (fold(pattern.value) !== fold(rule.value)) continue;
+      const clean = cleanVetoItem({
+        packId: pack.id,
+        packName: pack.name,
+        pattern: pattern.value,
+        patternType: type,
+        target,
+      });
+      if (clean) out.push(clean);
+    }
+  }
+  return out;
+}
+
+function vetoRecordKey(record) {
+  return [
+    record.kind || "rule",
+    record.packId || "",
+    record.patternType || "",
+    record.target || "",
+    record.patternType === "regex" ? String(record.pattern || "") : fold(record.pattern || ""),
+    fold(record.phrase || ""),
+    record.phraseScope || "",
+    record.phraseScope === "author" ? fold(record.handle || "") : "",
+  ].join("|");
+}
+
+/**
+ * What a false-positive confirm would turn off. Read-only: no ledger, no queue.
+ * Suspect items are keywords that still match. An AI suggestion also anti-distills
+ * phrases that occur in the post, even when they are not in a pack yet.
+ */
+export function falsePositivePlan(input, now = Date.now()) {
+  const packs = input?.packs || [];
+  const source = input?.source === "ai" ? "ai" : "suspect";
+  const ctx = {
+    text: clip(input?.text, 2000),
+    bio: clip(input?.bio, 500),
+    handle: sanitizeHandle(input?.handle),
+    now,
+  };
+  const vetoes = Array.isArray(input?.vetoes) ? input.vetoes : [];
+  const items = [];
+  const seen = new Set();
+  const push = (item) => {
+    const clean = cleanVetoItem(item);
+    if (!clean || items.length >= 8) return;
+    if (suppressionFor(clean, vetoes, ctx, now) === "hard") return;
+    const key = vetoItemKey(clean);
+    if (seen.has(key)) return;
+    seen.add(key);
+    items.push(clean);
+  };
+  const hits = collectRuleHits(packs, ctx);
+  for (const hit of hits) push(hit);
+  if (source === "ai") {
+    const distilled = distillSuggestion({
+      label: input?.label,
+      reason: input?.reason,
+      text: ctx.text,
+      bio: ctx.bio,
+      handle: ctx.handle,
+      keywords: input?.keywords,
+    });
+    for (const rule of distilled.rules) {
+      const located = locatePatterns(packs, rule);
+      if (located.length) located.forEach(push);
+      else {
+        push({
+          packId: "",
+          packName: "",
+          pattern: rule.value,
+          patternType: rule.type,
+          target: rule.target,
+        });
+      }
+    }
+  }
+  const phrase = distillException({
+    text: ctx.text,
+    bio: ctx.bio,
+    blocked: [...hits.map((hit) => hit.pattern), ...items.map((item) => item.pattern)],
+    packs,
+  }).phrase;
+  const days = clampInt(input?.cooldownDays, 0, 365, 14);
+  return {
+    ok: true,
+    source,
+    items,
+    phrase,
+    cooldownDays: days,
+    until: days === 0 ? 0 : now + days * VETO_DAY_MS,
+  };
+}
+
+/**
+ * Record a local veto and optional exception. Does not read strike counts,
+ * does not unmark, and does not enqueue mute or block.
+ */
+export function applyFalsePositive(state, input, now = Date.now()) {
+  if (!state?.settings) return { ok: false, error: "empty-veto" };
+  const days = clampInt(state.settings.vetoCooldownDays, 0, 365, 14);
+  const plan = falsePositivePlan({
+    packs: state.settings.keywordPacks,
+    vetoes: state.vetoes,
+    cooldownDays: days,
+    source: input?.source,
+    text: input?.text,
+    bio: input?.bio,
+    handle: input?.handle,
+    label: input?.label,
+    reason: input?.reason,
+    keywords: input?.keywords,
+  }, now);
+  const allowed = new Map(plan.items.map((item) => [vetoItemKey(item), item]));
+  const requested = Array.isArray(input?.items) ? input.items : plan.items;
+  const chosen = [];
+  for (const raw of requested.slice(0, 8)) {
+    const clean = cleanVetoItem(raw);
+    if (!clean) continue;
+    const known = allowed.get(vetoItemKey(clean));
+    if (!known || chosen.some((item) => vetoItemKey(item) === vetoItemKey(known))) continue;
+    chosen.push(known);
+  }
+  const wantException = input?.exception === true && !!plan.phrase;
+  const handle = sanitizeHandle(input?.handle);
+  const scope = input?.phraseScope === "any" || !handle ? "any" : "author";
+  const source = plan.source;
+  const hash = source === "ai" ? suggestionHash(input) : "";
+  if (!chosen.length && !wantException && source !== "ai") return { ok: false, error: "empty-veto" };
+  if (!Array.isArray(state.vetoes)) state.vetoes = [];
+  const tweetId = String(input?.tweetId || "").replace(/[^\w-]/g, "").slice(0, 40);
+  const snip = snippet(input?.text, 80);
+  const added = [];
+  const upsert = (record) => {
+    const key = vetoRecordKey({ ...record, handle });
+    const existing = state.vetoes.find((item) => vetoRecordKey(item) === key && vetoActive(item, now));
+    if (existing) {
+      existing.at = now;
+      existing.until = record.until;
+      existing.snippet = snip;
+      existing.tweetId = tweetId || existing.tweetId;
+      existing.handle = handle || existing.handle;
+      existing.hash = record.hash || existing.hash;
+      existing.packName = record.packName || existing.packName;
+      existing.phraseScope = record.phraseScope || existing.phraseScope;
+      added.push(existing);
+      return;
+    }
+    const next = { ...record, id: uid("veto"), at: now, snippet: snip, tweetId, handle };
+    state.vetoes.unshift(next);
+    added.push(next);
+  };
+  for (const item of chosen) {
+    upsert({
+      kind: "rule",
+      until: plan.until,
+      packId: item.packId,
+      packName: item.packName,
+      pattern: item.pattern,
+      patternType: item.patternType,
+      target: item.target,
+      phrase: "",
+      phraseScope: "",
+      source,
+      hash,
+    });
+  }
+  if (wantException) {
+    const targets = chosen.length
+      ? chosen
+      : [{ packId: "", packName: "", pattern: "", patternType: "keyword", target: "any" }];
+    for (const item of targets) {
+      if (!item.pattern && targets.length > 1) continue;
+      upsert({
+        kind: "exception",
+        until: 0,
+        packId: item.packId,
+        packName: item.packName,
+        pattern: item.pattern,
+        patternType: item.patternType || "keyword",
+        target: item.target || "any",
+        phrase: plan.phrase,
+        phraseScope: scope,
+        source,
+        hash,
+      });
+    }
+  }
+  if (!chosen.length && !wantException && source === "ai") {
+    upsert({
+      kind: "ai",
+      until: plan.until,
+      packId: "",
+      packName: "",
+      pattern: "",
+      patternType: "keyword",
+      target: "any",
+      phrase: "",
+      phraseScope: "",
+      source: "ai",
+      hash,
+    });
+  }
+  state.vetoes = state.vetoes.slice(0, VETO_CAP);
+  return {
+    ok: true,
+    added,
+    count: chosen.length,
+    phrase: wantException ? plan.phrase : "",
+    scope: wantException ? scope : "",
+    cooldownDays: days,
+    until: plan.until,
+    hash,
+  };
+}
+
+/** Drop one veto. Does not change strike counts, the queue, or whitelist. */
+export function undoVeto(state, input) {
+  const id = String(input?.id || "").slice(0, 80);
+  if (!id || !Array.isArray(state?.vetoes)) return { ok: false, error: "no-veto" };
+  const next = state.vetoes.filter((item) => item.id !== id);
+  if (next.length === state.vetoes.length) return { ok: false, error: "no-veto" };
+  state.vetoes = next;
+  return { ok: true };
+}
+
+function sanitizeVeto(raw, now) {
+  if (!raw || typeof raw !== "object") return null;
+  const kind = raw.kind === "exception" || raw.kind === "ai" ? raw.kind : "rule";
+  const patternType = raw.patternType === "regex" ? "regex" : "keyword";
+  const target = KEYWORD_TARGETS.includes(raw.target) ? raw.target : "any";
+  const pattern = String(raw.pattern || "").trim().slice(0, patternType === "regex" ? 180 : 80);
+  const phrase = collapse(raw.phrase || "").slice(0, 40);
+  if (kind === "rule" && !pattern) return null;
+  if (kind === "exception" && phrase.length < 2) return null;
+  if (kind === "ai" && !raw.hash && !pattern) return null;
+  if (pattern && patternType === "regex") {
+    try {
+      compileRegex(pattern);
+    } catch {
+      return null;
+    }
+  }
+  if (pattern && patternType === "keyword" && !/[\p{L}\p{N}]/u.test(pattern)) return null;
+  const untilRaw = raw.until === 0 || raw.until === "0" ? 0 : timeOf(raw.until, 0);
+  return {
+    id: String(raw.id || uid("veto")).slice(0, 80),
+    kind,
+    at: timeOf(raw.at, now),
+    until: untilRaw > 0 ? untilRaw : 0,
+    packId: String(raw.packId || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40),
+    packName: snippet(raw.packName, 40),
+    pattern,
+    patternType,
+    target,
+    phrase: kind === "exception" ? phrase : "",
+    phraseScope: raw.phraseScope === "any" ? "any" : raw.phraseScope === "author" ? "author" : "",
+    handle: sanitizeHandle(raw.handle),
+    tweetId: String(raw.tweetId || "").replace(/[^\w-]/g, "").slice(0, 40),
+    snippet: snippet(raw.snippet, 80),
+    source: raw.source === "ai" ? "ai" : "suspect",
+    hash: String(raw.hash || "").replace(/[^a-f0-9]/gi, "").slice(0, 32),
   };
 }
 
@@ -1300,6 +1796,7 @@ export function sanitizeSettings(prev, patch) {
   if (typeof src.libraryChipFromStrikes === "boolean") base.libraryChipFromStrikes = src.libraryChipFromStrikes;
   if (typeof src.bookmarkMarkAddsStrike === "boolean") base.bookmarkMarkAddsStrike = src.bookmarkMarkAddsStrike;
   if (src.libraryChipThreshold != null) base.libraryChipThreshold = clampInt(src.libraryChipThreshold, 1, 99, base.libraryChipThreshold || 3);
+  if (src.vetoCooldownDays != null) base.vetoCooldownDays = clampInt(src.vetoCooldownDays, 0, 365, base.vetoCooldownDays ?? 14);
   if (src.tagThresholds && typeof src.tagThresholds === "object") {
     const next = { ...base.tagThresholds };
     for (const [name, value] of Object.entries(src.tagThresholds)) {
@@ -2292,6 +2789,11 @@ export function exportData(state, options = {}) {
     })),
     tweets: Object.values(state.tweets).map((tweet) => ({ ...tweet, markedAt: stamp(tweet.markedAt) })),
     hidden: Object.values(state.hidden).map((item) => ({ ...item, hiddenAt: stamp(item.hiddenAt) })),
+    vetoes: (state.vetoes || []).map((item) => ({
+      ...item,
+      at: stamp(item.at),
+      until: item.until ? stamp(item.until) : 0,
+    })),
   };
 }
 
@@ -2385,6 +2887,20 @@ export function importData(state, payload, options, now) {
     if (!state.hidden[userId]) state.hidden[userId] = { userId, handle, hiddenAt: timeOf(raw.hiddenAt, now) };
   }
   let warnings = [];
+  if (options?.settings && Array.isArray(payload.vetoes)) {
+    const incoming = [];
+    for (const raw of payload.vetoes.slice(0, VETO_CAP)) {
+      const clean = sanitizeVeto(raw, now);
+      if (clean) incoming.push(clean);
+    }
+    if (mode === "replace") {
+      state.vetoes = incoming.slice(0, VETO_CAP);
+    } else {
+      const map = new Map((state.vetoes || []).map((item) => [item.id, item]));
+      for (const item of incoming) map.set(item.id, item);
+      state.vetoes = [...map.values()].sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, VETO_CAP);
+    }
+  }
   if (options?.settings && payload.settings) {
     const patch = structuredClone(payload.settings);
     if (!options.includeSecrets && patch.ai) delete patch.ai.apiKey;
@@ -2470,6 +2986,13 @@ export function normalizeState(raw, now = Date.now()) {
         tweetId,
         snippet: snippet(item.snippet, 80),
       });
+    }
+  }
+  state.vetoes = [];
+  if (Array.isArray(raw.vetoes)) {
+    for (const item of raw.vetoes.slice(0, VETO_CAP)) {
+      const clean = sanitizeVeto(item, now);
+      if (clean) state.vetoes.push(clean);
     }
   }
   state.rate = {
