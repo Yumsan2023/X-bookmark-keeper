@@ -100,6 +100,12 @@ button:disabled { opacity: 0.45; }
 .evidence { margin: 6px 0 0 12px; color: var(--muted); font-size: 13px; }
 .pattern { display: grid; grid-template-columns: 110px 110px minmax(0, 1fr) auto auto; gap: 6px; margin-top: 6px; align-items: center; }
 .pattern .enqueue { margin: 0; white-space: nowrap; font-size: 13px; }
+#tag-effects label {
+  display: grid;
+  grid-template-columns: minmax(7em, 16em) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
 #status { min-height: 1.3em; font-weight: 650; }
 #status.bad { color: var(--margin); }
 #status.ok { color: var(--ok); }

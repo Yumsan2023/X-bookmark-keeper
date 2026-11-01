@@ -300,7 +300,7 @@ const dict = {
   author_flag_done: { zh: '已更新 {n} 个作者', en: 'Updated {n} authors' },
   author_flag_fail: { zh: '有 {n} 个作者没写上', en: 'Could not update {n} authors' },
   author_link_title: { zh: '书签与打击账本', en: 'Bookmarks and Strike Ledger' },
-  author_link_help: { zh: '作者标记只存在打击账本 xsl 里（ledger[用户].authorFlags），书签库读同一份，不另建库。常营销 / 常垃圾只是标签，不删除书签，也不自动静音或屏蔽。白名单仍是硬保护，已关注仍是软保护。', en: 'Author flags live only in the strike ledger (xsl, ledger[user].authorFlags). The library reads that same record. The chip does not delete bookmarks and does not mute or block. Whitelist stays a hard protect. Following stays a soft protect.' },
+  author_link_help: { zh: '作者标记只存在打击账本 xsl 里（ledger[用户].authorFlags），书签库读同一份，不另建库。常营销 / 常垃圾只是标签，不删除书签，也不自动静音或屏蔽。白名单仍是硬保护，已关注仍是软保护。芯片颜色和帖子描边跟打击账本的「标签效果」走，存在本机。', en: 'Author flags live only in the strike ledger (xsl, ledger[user].authorFlags). The library reads that same record. The chip does not delete bookmarks and does not mute or block. Whitelist stays a hard protect. Following stays a soft protect. Chip color and the card edge follow the ledger’s tag effects, stored on this device.' },
   author_link_from_strikes: { zh: '打击次数达到阈值时，在书签里显示常营销 / 常垃圾', en: 'Show the library chip when strike counts reach the threshold' },
   author_link_threshold: { zh: '书签芯片阈值', en: 'Library chip threshold' },
   author_link_threshold_hint: { zh: '和静音/屏蔽用的阈值分开。默认 3。', en: 'Separate from the mute/block threshold. Default 3.' },

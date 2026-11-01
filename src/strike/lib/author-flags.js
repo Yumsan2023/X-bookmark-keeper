@@ -5,9 +5,12 @@
  *   - explicit flags: ledger[userId].authorFlags.{marketing,spam}
  *   - strike counts: ledger[userId].tags (Spam / Marketing)
  *   - settings: settings.libraryChipFromStrikes, libraryChipThreshold, bookmarkMarkAddsStrike
+ *   - display only: settings.tagEffects (chip / none / outline / fold)
  * The public index (`xsl.index`) copies authorFlags and tag counts so the library
  * can read them without the evidence blobs. There is no second map in bk_* and
  * no Dexie authors table. Chips are derived by libraryMarksForAccount.
+ * Tag effects change paint only. They do not add strikes, enqueue mute or block,
+ * or change whitelist, follow, or community-list decisions.
  * This module never enqueues mute or block.
  */
 
@@ -16,8 +19,118 @@ export const AUTHOR_FLAG_STORE = {
   key: "xsl",
   accountField: "ledger[userId].authorFlags",
   indexField: "index[userId].authorFlags",
-  settings: ["libraryChipFromStrikes", "libraryChipThreshold", "bookmarkMarkAddsStrike"],
+  settings: ["libraryChipFromStrikes", "libraryChipThreshold", "bookmarkMarkAddsStrike", "tagEffects"],
 };
+
+/** Per-tag paint. Missing or unknown values stay on the existing chip colors. */
+export const TAG_EFFECT_IDS = ["none", "chip", "outline", "fold"];
+export const DEFAULT_TAG_EFFECT = "chip";
+
+function effectKey(name) {
+  const raw = String(name || "").trim().replace(/\s+/g, " ");
+  if (!raw) return "";
+  if (/^spam$/i.test(raw)) return "Spam";
+  if (/^marketing$/i.test(raw)) return "Marketing";
+  return raw.slice(0, 24);
+}
+
+/** Resolved effect for one canonical tag. Default is the current colored chip. */
+export function tagEffectFor(settings, name) {
+  const tag = effectKey(name);
+  if (!tag) return DEFAULT_TAG_EFFECT;
+  const raw = settings?.tagEffects?.[tag];
+  return TAG_EFFECT_IDS.includes(raw) ? raw : DEFAULT_TAG_EFFECT;
+}
+
+/** spam / marketing / custom. Used for borders and the collapse bar, not for queueing. */
+export function tagEffectTone(name) {
+  const tag = effectKey(name);
+  if (tag === "Spam") return "spam";
+  if (tag === "Marketing") return "marketing";
+  return tag ? "custom" : "";
+}
+
+/**
+ * Keep only known effects for Spam, Marketing, and the caller's custom tags.
+ * The default chip effect is omitted so older ledgers stay unchanged.
+ */
+export function sanitizeTagEffects(raw, allowed) {
+  const keep = new Set(allowed || []);
+  const next = {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return next;
+  for (const [name, value] of Object.entries(raw)) {
+    const tag = effectKey(name);
+    if (!tag || !keep.has(tag)) continue;
+    if (!TAG_EFFECT_IDS.includes(value) || value === DEFAULT_TAG_EFFECT) continue;
+    next[tag] = value;
+  }
+  return next;
+}
+
+function toneRank(tone) {
+  if (tone === "spam") return 0;
+  if (tone === "marketing") return 1;
+  return 2;
+}
+
+/**
+ * Attach a display effect to timeline/comment chips.
+ * `outline` is the one card accent: Spam, then Marketing, then the first custom chip.
+ * Does not read or write strike counts.
+ */
+export function decorateTagChips(chips, settings) {
+  const list = Array.isArray(chips) ? chips : [];
+  const next = list.map((chip) => {
+    if (!chip || chip.more || !chip.name) return { ...(chip || {}), effect: "none" };
+    return { ...chip, effect: tagEffectFor(settings, chip.name) };
+  });
+  let outline = "";
+  let best = 99;
+  let bestIndex = 99;
+  next.forEach((chip, index) => {
+    if (!chip || chip.more || chip.effect !== "outline") return;
+    const tone = tagEffectTone(chip.name);
+    const rank = toneRank(tone);
+    if (rank < best || (rank === best && index < bestIndex)) {
+      best = rank;
+      bestIndex = index;
+      outline = tone;
+    }
+  });
+  return { chips: next, outline };
+}
+
+/** Collapse-bar accent for a tag whose effect is fold. Empty means the existing orange bar. */
+export function foldAccent(settings, tag) {
+  const name = effectKey(tag);
+  if (!name || tagEffectFor(settings, name) !== "fold") return "";
+  return tagEffectTone(name);
+}
+
+/**
+ * Bookmark author chips share the Spam / Marketing effect.
+ * Fold has no bar in the library, so the chip stays colored.
+ * Outline prefers spam when both chips ask for a card edge.
+ */
+export function libraryAuthorDecor(marks, settings) {
+  const spamOn = !!marks?.spam;
+  const marketingOn = !!marks?.marketing;
+  const spamEffect = tagEffectFor(settings, "Spam");
+  const marketingEffect = tagEffectFor(settings, "Marketing");
+  let outline = "";
+  if (spamOn && spamEffect === "outline") outline = "spam";
+  else if (marketingOn && marketingEffect === "outline") outline = "marketing";
+  return {
+    spamEffect: spamOn ? spamEffect : "",
+    marketingEffect: marketingOn ? marketingEffect : "",
+    outline,
+  };
+}
+
+export function bookmarkOutlineClass(marks, settings) {
+  const outline = libraryAuthorDecor(marks, settings).outline;
+  return outline ? `fx-outline-${outline}` : "";
+}
 
 function clampInt(value, min, max, fallback) {
   const n = Number(value);
@@ -57,6 +170,10 @@ export function authorLinkSettings(settings) {
     libraryChipFromStrikes: libraryChipFromStrikes(settings),
     libraryChipThreshold: libraryChipThreshold(settings),
     bookmarkMarkAddsStrike: settings?.bookmarkMarkAddsStrike === true,
+    tagEffects: {
+      Spam: tagEffectFor(settings, "Spam"),
+      Marketing: tagEffectFor(settings, "Marketing"),
+    },
   };
 }
 

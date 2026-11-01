@@ -77,6 +77,7 @@ describe('author flag store', () => {
       'libraryChipFromStrikes',
       'libraryChipThreshold',
       'bookmarkMarkAddsStrike',
+      'tagEffects',
     ])
   })
 })

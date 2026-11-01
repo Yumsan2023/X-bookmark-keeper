@@ -1,7 +1,9 @@
 import type { Post } from '@/shared/types'
-import { marksForPost } from '@/strike/lib/author-flags.js'
+import { bookmarkOutlineClass, libraryAuthorDecor, marksForPost } from '@/strike/lib/author-flags.js'
 import type { AuthorFlagName } from '../author-flags'
 import { useT } from '../i18n'
+
+export type TagEffectChoice = { Spam?: string; Marketing?: string }
 
 export interface AuthorMarkLookup {
   byUserId: { get(id: string): unknown }
@@ -19,10 +21,31 @@ function readMarks(post: Post, lookup?: AuthorMarkLookup | null): Marks {
   return (marksForPost(post, lookup) ?? {}) as Marks
 }
 
-export function AuthorMarkChips({ post, lookup }: { post: Post; lookup?: AuthorMarkLookup | null }) {
+export function authorOutlineClass(post: Post, lookup?: AuthorMarkLookup | null, effects?: TagEffectChoice) {
+  return String(bookmarkOutlineClass(readMarks(post, lookup), { tagEffects: effects || {} }) || '')
+}
+
+function chipClass(effect: string, kind: 'spam' | 'marketing') {
+  if (effect === 'none') return 'badge author-plain'
+  return kind === 'spam' ? 'badge author-spam' : 'badge author-marketing'
+}
+
+export function AuthorMarkChips({
+  post,
+  lookup,
+  effects,
+}: {
+  post: Post
+  lookup?: AuthorMarkLookup | null
+  effects?: TagEffectChoice
+}) {
   const t = useT()
   const marks = readMarks(post, lookup)
   if (!marks.marketing && !marks.spam) return null
+  const decor = libraryAuthorDecor(marks, { tagEffects: effects || {} }) as {
+    spamEffect?: string
+    marketingEffect?: string
+  }
   const titleFor = (kind: AuthorFlagName) => {
     const explicit = !!marks.explicit?.[kind]
     const fromStrike = !!marks.fromStrike?.[kind]
@@ -33,12 +56,12 @@ export function AuthorMarkChips({ post, lookup }: { post: Post; lookup?: AuthorM
   return (
     <span className="author-marks">
       {marks.marketing && (
-        <span className="badge author-marketing" title={titleFor('marketing')}>
+        <span className={chipClass(decor.marketingEffect || 'chip', 'marketing')} title={titleFor('marketing')}>
           {t('chip_marketing')}
         </span>
       )}
       {marks.spam && (
-        <span className="badge author-spam" title={titleFor('spam')}>
+        <span className={chipClass(decor.spamEffect || 'chip', 'spam')} title={titleFor('spam')}>
           {t('chip_spam')}
         </span>
       )}

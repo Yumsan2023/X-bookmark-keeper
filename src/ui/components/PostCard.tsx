@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { Post } from '@/shared/types'
 import { highlight } from '@/search/highlight'
 import { AccountBadges } from './AccountBadges'
-import { AuthorMarkButtons, AuthorMarkChips, type AuthorMarkLookup } from './AuthorMarks'
+import { AuthorMarkButtons, AuthorMarkChips, authorOutlineClass, type AuthorMarkLookup, type TagEffectChoice } from './AuthorMarks'
 import type { AuthorFlagName } from '../author-flags'
 import { useLang, useT } from '../i18n'
 import { fmtDate, fmtNum } from '../util'
@@ -25,15 +25,16 @@ interface Props {
   onDelete?: (post: Post) => void
   compact?: boolean
   authorLookup?: AuthorMarkLookup | null
+  authorEffects?: TagEffectChoice
   onAuthorFlag?: (post: Post, flag: AuthorFlagName, value: boolean) => void
 }
 
-export function PostCard({ post: p, terms, selected, onSelect, onTag, onNote, onDelete, compact, authorLookup, onAuthorFlag }: Props) {
+export function PostCard({ post: p, terms, selected, onSelect, onTag, onNote, onDelete, compact, authorLookup, authorEffects, onAuthorFlag }: Props) {
   const t = useT()
   const lang = useLang()
   const [showThread, setShowThread] = useState(false)
   return (
-    <article className={`card ${p.status !== 'active' ? 'card-dim' : ''} ${selected ? 'card-sel' : ''}`}>
+    <article className={`card ${p.status !== 'active' ? 'card-dim' : ''} ${selected ? 'card-sel' : ''} ${authorOutlineClass(p, authorLookup, authorEffects)}`.trim()}>
       <input className="sel" type="checkbox" checked={selected} onChange={(e) => onSelect(p.tweet_id, e.target.checked)} />
       <div className="card-main">
         <header className="card-head">
@@ -46,7 +47,7 @@ export function PostCard({ post: p, terms, selected, onSelect, onTag, onNote, on
           {p.status === 'unbookmarked' && <span className="badge warn">{t('unbookmarked_badge')}</span>}
           {p.folder && <span className="badge">📁 {p.folder}</span>}
           <AccountBadges accounts={p.accounts} />
-          <AuthorMarkChips post={p} lookup={authorLookup} />
+          <AuthorMarkChips post={p} lookup={authorLookup} effects={authorEffects} />
         </header>
         <p className="text"><Hl text={p.text} terms={terms} /></p>
         {p.quoted && (
