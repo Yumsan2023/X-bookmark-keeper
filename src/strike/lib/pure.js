@@ -130,6 +130,68 @@ export function autoPlatformAllowed(settings, account, kind) {
   return false;
 }
 
+/** How many tag chips to paint before a “+N” overflow chip. */
+export const CHIP_CAP = 4;
+
+/**
+ * Protect badge and persistent tag chips for one timeline author.
+ * Display only — this does not enqueue mute or block. Following and
+ * whitelist stay refused by autoPlatformAllowed; the badge only shows that.
+ * `options.followed` is the live page state and wins over the stored flag.
+ * @param {{ whitelist?: boolean, followed?: boolean | null, counts?: Record<string, number> }} [account]
+ * @param {{ lang?: string, followed?: boolean | null, limit?: number }} [options]
+ */
+export function timelineChrome(account, options = {}) {
+  const lang = options.lang === "zh" ? "zh" : "en";
+  const live = options.followed;
+  const stored = account?.followed;
+  const followed = live === true || live === false
+    ? live
+    : stored === true ? true : stored === false ? false : null;
+  const whitelist = !!account?.whitelist;
+  let protect = null;
+  if (followed === true || whitelist) {
+    const reason = followed === true && whitelist ? "both" : followed === true ? "following" : "whitelist";
+    const titleKey = reason === "both" ? "protectBoth" : reason === "whitelist" ? "protectWhitelist" : "protectFollowing";
+    protect = {
+      reason,
+      titleKey,
+      tone: "protect",
+      text: lang === "zh" ? (followed === true ? "已关注保护" : "白名单保护") : "Protected",
+    };
+  }
+  const counts = account?.counts && typeof account.counts === "object" ? account.counts : {};
+  const merged = new Map();
+  for (const [rawName, rawCount] of Object.entries(counts)) {
+    const name = canonicalTag(rawName);
+    const count = Math.floor(Number(rawCount));
+    if (!name || !Number.isFinite(count) || count < 1) continue;
+    merged.set(name, (merged.get(name) || 0) + count);
+  }
+  const rows = [...merged.entries()].map(([name, count]) => ({ name, count }));
+  rows.sort((a, b) => {
+    const rank = (name) => (name === "Spam" ? 0 : name === "Marketing" ? 1 : 2);
+    const byRank = rank(a.name) - rank(b.name);
+    if (byRank) return byRank;
+    if (b.count !== a.count) return b.count - a.count;
+    return a.name.localeCompare(b.name);
+  });
+  const limit = clampInt(options.limit, 1, 8, CHIP_CAP);
+  const shown = rows.slice(0, limit);
+  const extra = rows.length - shown.length;
+  const chips = shown.map((row) => ({
+    name: row.name,
+    tone: row.name === "Spam" ? "spam" : row.name === "Marketing" ? "marketing" : "custom",
+    count: row.count,
+    text: `${tagLabel(row.name, lang)}×${row.count}`,
+    more: false,
+  }));
+  if (extra > 0) {
+    chips.push({ name: "", tone: "more", count: extra, text: `+${extra}`, more: true });
+  }
+  return { protect, chips };
+}
+
 export function contentHash(parts) {
   const text = (Array.isArray(parts) ? parts.join("\n") : String(parts ?? ""))
     .normalize("NFKC")

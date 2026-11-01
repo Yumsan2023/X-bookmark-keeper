@@ -12,9 +12,10 @@ import {
   resolveLang,
   suggestPackId,
   tagLabel,
+  timelineChrome,
 } from "../lib/pure.js";
 import { performPlatformAction } from "./act.js";
-import { createOverlay, mountBar, openAiSuggest, openChoice, openPicker, toast } from "./view.js";
+import { createOverlay, mountBar, mountInline, openAiSuggest, openChoice, openPicker, toast } from "./view.js";
 
 const expanded = new Set();
 const aiAsked = new Set();
@@ -35,12 +36,6 @@ let scanTimer = 0;
 
 function t(key, vars) {
   return translate(dict, lang, key, vars);
-}
-
-function toneOf(name) {
-  if (name === "Spam") return "spam";
-  if (name === "Marketing") return "marketing";
-  return "custom";
 }
 
 function pageContext() {
@@ -99,6 +94,58 @@ function stop(event) {
   event.stopPropagation();
 }
 
+function chromeFor(meta, record) {
+  const chrome = timelineChrome(
+    {
+      whitelist: !!record?.whitelist,
+      followed: record?.followed,
+      counts: record?.counts || {},
+    },
+    { lang, followed: meta?.followed },
+  );
+  const protect = chrome.protect ? { ...chrome.protect, title: t(chrome.protect.titleKey) } : null;
+  const chips = chrome.chips.map((chip) => ({
+    ...chip,
+    title: chip.more ? t("chipMore", { count: chip.count }) : t("chipOpen"),
+  }));
+  return {
+    signature: {
+      protect: protect ? `${protect.reason}:${protect.text}` : "",
+      chips: chips.map((chip) => `${chip.text}:${chip.name}`).join(","),
+      lang,
+    },
+    protect,
+    chips,
+  };
+}
+
+function outsideQuote(article, node) {
+  const quote = article.querySelector('[data-testid="quoteTweet"]');
+  return !quote || !quote.contains(node);
+}
+
+function syncNameHost(article, model) {
+  const block = [...article.querySelectorAll('[data-testid="User-Name"]')].find((node) => outsideQuote(article, node));
+  const existing = [...article.querySelectorAll("[data-xsl-name]")];
+  let host = existing.find((node) => outsideQuote(article, node)) || null;
+  for (const extra of existing) {
+    if (extra !== host) extra.remove();
+  }
+  const visible = !!(model.protect || model.chips.length);
+  if (!visible || !block?.parentElement) {
+    host?.remove();
+    return;
+  }
+  if (!host) {
+    host = document.createElement("div");
+    host.dataset.xslName = "1";
+  }
+  if (host.parentElement !== block.parentElement || host.previousElementSibling !== block) {
+    block.insertAdjacentElement("afterend", host);
+  }
+  mountInline(host, model, { onChip: () => openTags(article) });
+}
+
 function placeholder(article, meta, record) {
   let node = article.querySelector(":scope > [data-xsl-placeholder]");
   if (!node) {
@@ -107,14 +154,22 @@ function placeholder(article, meta, record) {
     node.dataset.xslKeep = "1";
     article.prepend(node);
   }
-  const bits = Object.entries(record?.counts || {}).map(([name, count]) => `${tagLabel(name, lang)} ${count}`);
-  const signature = `${lang}|${meta.handle}|${bits.join(",")}`;
+  const chrome = chromeFor(meta, record);
+  const bits = chrome.chips.map((chip) => chip.text);
+  const signature = `${lang}|${meta.handle}|${chrome.protect?.text || ""}|${bits.join(",")}`;
   if (node.dataset.sig === signature) return;
   node.dataset.sig = signature;
   node.replaceChildren();
   const title = document.createElement("div");
   title.className = "xsl-ph-title";
   title.textContent = t("collapsed", { handle: meta.handle });
+  if (chrome.protect) {
+    const badge = document.createElement("span");
+    badge.className = "xsl-protect";
+    badge.textContent = chrome.protect.text;
+    badge.title = chrome.protect.title;
+    title.append(document.createTextNode(" "), badge);
+  }
   const detail = document.createElement("div");
   detail.className = "xsl-ph-meta";
   detail.textContent = bits.join(" · ") || t("hiddenOn");
@@ -349,9 +404,11 @@ async function openTags(article) {
   const settings = snapshot?.settings || {};
   const names = ["Spam", "Marketing", ...(settings.customTags || [])];
   const here = new Set(tweetTags(meta.tweetId));
+  const chrome = chromeFor(meta, record);
   const action = await withOverlay(() => openPicker(overlay, {
     title: `@${meta.handle}`,
     subtitle: meta.displayName || "",
+    note: chrome.protect?.title || "",
     tags: names.map((name) => ({
       name,
       label: tagLabel(name, lang),
@@ -543,12 +600,7 @@ function render(article, meta) {
     else article.append(host);
   }
   const record = indexOf(meta.userId);
-  const counts = record?.counts || {};
-  const badges = Object.entries(counts).slice(0, 4).map(([name, count]) => ({
-    tone: toneOf(name),
-    text: `${tagLabel(name, lang)} ${count}`,
-    title: `@${meta.handle}`,
-  }));
+  const chrome = chromeFor(meta, record);
   const matched = suspectFor(meta);
   if (matched) maybeRecordHits(meta, matched);
   const ai = aiResults.get(meta.tweetId);
@@ -557,21 +609,16 @@ function render(article, meta) {
   if (matched && settings?.ai?.enabled && settings.ai.autoSuggestSuspects && settings.ai.hasApiKey && !aiAsked.has(meta.tweetId)) {
     askAi(meta);
   }
-  mountBar(host, {
+  const model = {
+    ...chrome,
     signature: {
-      badges,
+      ...chrome.signature,
       suspect: matched?.reasons?.map((reason) => reason.packId).join(",") || "",
       ai: ai ? `${ai.label || ai.verdict}:${ai.reason || ""}` : "",
-      followed: meta.followed === true,
-      whitelist: !!record?.whitelist,
       ask: !!settings?.ai?.enabled,
-      lang,
     },
     markLabel: t("mark"),
     shortcutTitle: `${shortcuts.spam || "Alt+S"} · ${shortcuts.marketing || "Alt+M"} · ${shortcuts.picker || "Alt+T"}`,
-    badges,
-    followed: meta.followed === true ? t("followed") : "",
-    whitelist: record?.whitelist ? t("whitelist") : "",
     suspect: matched ? {
       label: matched.reasons.length > 1 ? t("suspectCount", { count: matched.reasons.length }) : t("suspect"),
       title: matched.reasons.map((reason) => reason.packName).join(" · "),
@@ -581,12 +628,15 @@ function render(article, meta) {
       title: ai.reason || "",
     } : null,
     askAi: settings?.ai?.enabled && !ai?.ok ? t("aiSuggest") : "",
-  }, {
+  };
+  mountBar(host, model, {
     onPicker: () => openTags(article),
+    onChip: () => openTags(article),
     onSuspect: () => confirmRule(article),
     onAi: () => confirmAi(article),
     onAsk: () => askAi(meta),
   });
+  syncNameHost(article, chrome);
   article.dataset.xslHandle = meta.handle.toLowerCase();
   article.dataset.xslUser = meta.userId;
   syncHidden(article, meta);
@@ -610,7 +660,7 @@ function schedule() {
 
 function ourMutation(record) {
   const node = record.target?.nodeType === 1 ? record.target : record.target?.parentElement;
-  return !!node?.closest?.("[data-xsl-host], [data-xsl-overlay], [data-xsl-placeholder]");
+  return !!node?.closest?.("[data-xsl-host], [data-xsl-name], [data-xsl-overlay], [data-xsl-placeholder]");
 }
 
 function activeArticle() {
