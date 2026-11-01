@@ -1,4 +1,5 @@
 import { dispatch as dispatchStrike } from '@/strike/lib/store.js'
+import { handlePartnershipStats } from './partnership'
 import { installKeywordMenus } from './keyword-menu'
 import { registerAuthCapture } from './auth-capture'
 import { installDnrRules } from './dnr'
@@ -15,6 +16,11 @@ registerAuthCapture()
 installKeywordMenus()
 
 chrome.runtime.onMessage.addListener((msg: BgRequest, sender, sendResponse) => {
+  // Read-only hover stats. Kept out of the strike dispatcher so it cannot mark or enqueue.
+  if ((msg as { type?: string } | null)?.type === 'PARTNERSHIP_STATS') {
+    void handlePartnershipStats(msg as { handle?: string }, sender).then(sendResponse)
+    return true
+  }
   if (isStrikeMessage(msg)) {
     void dispatchStrike(msg, sender).then(sendResponse)
     return true

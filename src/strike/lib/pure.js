@@ -22,6 +22,8 @@
  * Missing `enqueue` means allowed, which is the previous behavior.
  * settings.tagEffects only changes how a tag is painted (chip, none, outline, fold).
  * It does not change strikes, queueing, whitelist, follow, or community lists.
+ * hoverCardEnabled / partnershipRatioEnabled only control the hover card.
+ * The card does not mark, enqueue, mute, or block. The ratio fetch is read-only.
  */
 
 import {
@@ -481,6 +483,16 @@ export function defaultSettings() {
     commentHitMode: "fold",
     /** Collapse bar names the keyword, rule, AI label, or community list. Off still folds, without the reason. */
     foldReasonEnabled: true,
+    /**
+     * Timeline and reply hover card. Display only: no strike, no queue.
+     * Off hides the card. The ratio fetch below stays a separate switch.
+     */
+    hoverCardEnabled: true,
+    /**
+     * Read-only UserTweets sample for the paid-partnership ratio.
+     * Off by default so a hover does not spend the shared timeline rate limit.
+     */
+    partnershipRatioEnabled: false,
     /**
      * Optional community lists. Off until the user turns this on after importing.
      * Hits are yellow-chip / local-fold only: no strike, no mute, no block.
@@ -2481,7 +2493,7 @@ export function sanitizeSettings(prev, patch) {
   if (src.language === "auto" || src.language === "zh" || src.language === "en") base.language = src.language;
   if (src.defaultThreshold != null) base.defaultThreshold = clampInt(src.defaultThreshold, 1, 99, base.defaultThreshold);
   if (src.actionMode === "auto" || src.actionMode === "confirm" || src.actionMode === "prompt-only") base.actionMode = src.actionMode;
-  for (const key of ["hideOnThreshold", "muteOnThreshold", "blockOnThreshold", "enablePlatformActions", "rulesEnabled", "hitHistory", "commentScanEnabled", "foldReasonEnabled", "communityListsEnabled"]) {
+  for (const key of ["hideOnThreshold", "muteOnThreshold", "blockOnThreshold", "enablePlatformActions", "rulesEnabled", "hitHistory", "commentScanEnabled", "foldReasonEnabled", "communityListsEnabled", "hoverCardEnabled", "partnershipRatioEnabled"]) {
     if (typeof src[key] === "boolean") base[key] = src[key];
   }
   if (src.commentHitMode === "fold" || src.commentHitMode === "prompt") base.commentHitMode = src.commentHitMode;

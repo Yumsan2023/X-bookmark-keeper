@@ -1,5 +1,6 @@
 import { send } from "../lib/client.js";
-import { articleSurface, isNestedTweetArticle, parseArticle, TWEET_ARTICLE_SELECTOR } from "../lib/domparse.js";
+import { articleSurface, isNestedTweetArticle, isReservedHandle, parseArticle, TWEET_ARTICLE_SELECTOR } from "../lib/domparse.js";
+import { describeHoverCard, isPaidPartnershipLabel } from "../lib/partnership.js";
 import { loadDict, translate } from "../lib/i18n.js";
 import {
   canonicalTag,
@@ -17,6 +18,7 @@ import {
   matchRules,
   resolveLang,
   ruleEnqueueGate,
+  sanitizeHandle,
   strikeReasonFromMatch,
   suggestPackId,
   tagLabel,
@@ -25,7 +27,7 @@ import {
   foldAccent,
 } from "../lib/pure.js";
 import { performPlatformAction } from "./act.js";
-import { createOverlay, mountBar, mountInline, openAiSuggest, openChoice, openFalsePositive, openPicker, toast } from "./view.js";
+import { createHoverCard, createOverlay, mountBar, mountInline, openAiSuggest, openChoice, openFalsePositive, openPicker, toast } from "./view.js";
 
 const expanded = new Set();
 const foldToggle = new WeakMap();
@@ -44,6 +46,12 @@ let capNotified = "";
 let backoffNotified = 0;
 let aiInflight = 0;
 let scanTimer = 0;
+let hoverUi = null;
+let hoverToken = 0;
+let hoverShowTimer = 0;
+let hoverHideTimer = 0;
+let hoverAnchor = null;
+let hoverHandle = "";
 
 function t(key, vars) {
   return translate(dict, lang, key, vars);
@@ -80,6 +88,7 @@ function applySnapshot(next) {
   snapshot = next || null;
   if ((snapshot?.hitLog?.length || 0) < prevHits) reportedHits.clear();
   lang = resolveLang(snapshot?.settings?.language, navigator.language);
+  if (snapshot?.settings?.hoverCardEnabled === false) dismissHover();
   scan();
 }
 
@@ -491,6 +500,7 @@ function rememberFollow(meta) {
 }
 
 async function withOverlay(task) {
+  dismissHover();
   overlayBusy = true;
   try {
     return await task();
@@ -1040,7 +1050,7 @@ function schedule() {
 
 function ourMutation(record) {
   const node = record.target?.nodeType === 1 ? record.target : record.target?.parentElement;
-  return !!node?.closest?.("[data-xsl-host], [data-xsl-name], [data-xsl-overlay], [data-xsl-placeholder]");
+  return !!node?.closest?.("[data-xsl-host], [data-xsl-name], [data-xsl-overlay], [data-xsl-placeholder], [data-xsl-hover]");
 }
 
 function activeArticle() {
@@ -1070,6 +1080,10 @@ function typing(event) {
 }
 
 async function onKey(event) {
+  if (event.key === "Escape" && hoverUi?.isOpen()) {
+    dismissHover();
+    return;
+  }
   const shortcuts = snapshot?.settings?.shortcuts;
   if (!shortcuts || typing(event)) return;
   const article = activeArticle();
@@ -1174,6 +1188,145 @@ function onKeywordResult(message) {
   else toast(overlay, t("keywordAdded", { word: message.value, pack: message.packName }));
 }
 
+function elementFrom(node) {
+  if (!node) return null;
+  if (node.nodeType === 1) return node;
+  return node.parentElement || null;
+}
+
+function hoverAuthorAnchor(target) {
+  const node = elementFrom(target);
+  if (!node?.closest) return null;
+  if (node.closest("[data-xsl-hover], [data-xsl-overlay], [data-xsl-host], [data-xsl-name], [data-xsl-placeholder]")) return null;
+  const avatar = node.closest('[data-testid^="UserAvatar-Container-"]');
+  const name = node.closest('[data-testid="User-Name"]');
+  const anchor = avatar || name;
+  if (!anchor) return null;
+  const article = anchor.closest(TWEET_ARTICLE_SELECTOR);
+  if (!article || isNestedTweetArticle(article)) return null;
+  return anchor;
+}
+
+function authorFromHover(anchor) {
+  const inQuote = anchor.closest('[data-testid="quoteTweet"]');
+  const scope = inQuote || anchor.closest(TWEET_ARTICLE_SELECTOR);
+  if (!scope) return null;
+  const skipQuote = (node) => !inQuote && !!node.closest('[data-testid="quoteTweet"]');
+  let handle = "";
+  const avatar = anchor.matches?.('[data-testid^="UserAvatar-Container-"]')
+    ? anchor
+    : [...scope.querySelectorAll('[data-testid^="UserAvatar-Container-"]')].find((node) => !skipQuote(node));
+  if (avatar) {
+    handle = avatar.getAttribute("data-testid")?.slice("UserAvatar-Container-".length) || "";
+  }
+  const nameBlock = anchor.closest?.('[data-testid="User-Name"]')
+    || [...scope.querySelectorAll('[data-testid="User-Name"]')].find((node) => !skipQuote(node));
+  let displayName = "";
+  if (nameBlock) {
+    for (const link of nameBlock.querySelectorAll("a[href]")) {
+      const path = (link.getAttribute("href") || "").split("?")[0].split("#")[0];
+      const match = path.match(/^\/([A-Za-z0-9_]{1,15})\/?$/);
+      const text = (link.innerText || "").replace(/\s+/g, " ").trim();
+      if (match && !text.startsWith("@") && !displayName) displayName = text.slice(0, 80);
+      if (match && !handle) handle = match[1];
+      if (text.startsWith("@") && match) handle = handle || match[1];
+    }
+  }
+  handle = sanitizeHandle(handle);
+  if (!handle || isReservedHandle(handle)) return null;
+  const article = anchor.closest(TWEET_ARTICLE_SELECTOR);
+  let followed = null;
+  if (article && !inQuote) {
+    const meta = describe(article);
+    if (meta && meta.handle.toLowerCase() === handle.toLowerCase()) followed = meta.followed;
+  }
+  return { handle, displayName, followed, labelRoot: inQuote || article };
+}
+
+function recordForHandle(handle) {
+  const index = snapshot?.index || {};
+  const direct = index[`h:${handle.toLowerCase()}`];
+  if (direct) return direct;
+  const want = handle.toLowerCase();
+  for (const row of Object.values(index)) {
+    if (String(row?.handle || "").toLowerCase() === want) return row;
+  }
+  return null;
+}
+
+function visiblePaidLabel(root) {
+  if (!root?.querySelectorAll) return false;
+  const inQuote = root.getAttribute?.("data-testid") === "quoteTweet";
+  for (const node of root.querySelectorAll("span, div")) {
+    if (!inQuote && node.closest("[data-testid='quoteTweet']")) continue;
+    if (node.closest("[data-testid='tweetText']")) continue;
+    if (node.closest("[data-xsl-host], [data-xsl-name], [data-xsl-placeholder], [data-xsl-hover]")) continue;
+    if (node.childElementCount) continue;
+    if (isPaidPartnershipLabel(node.textContent || "")) return true;
+  }
+  return false;
+}
+
+function dismissHover() {
+  clearTimeout(hoverShowTimer);
+  clearTimeout(hoverHideTimer);
+  hoverToken += 1;
+  hoverAnchor = null;
+  hoverHandle = "";
+  hoverUi?.hide();
+}
+
+function scheduleHover(anchor) {
+  if (overlayBusy || snapshot?.settings?.hoverCardEnabled === false) return;
+  const author = authorFromHover(anchor);
+  if (!author) return;
+  clearTimeout(hoverHideTimer);
+  if (hoverUi?.isOpen() && hoverHandle === author.handle.toLowerCase()) {
+    hoverAnchor = anchor;
+    return;
+  }
+  if (hoverUi?.isOpen()) hoverUi.hide();
+  if (hoverAnchor === anchor && hoverShowTimer) return;
+  clearTimeout(hoverShowTimer);
+  const token = ++hoverToken;
+  hoverAnchor = anchor;
+  hoverShowTimer = setTimeout(() => { void openHover(anchor, token); }, 280);
+}
+
+async function openHover(anchor, token) {
+  if (token !== hoverToken || overlayBusy) return;
+  if (snapshot?.settings?.hoverCardEnabled === false) return;
+  if (!document.contains(anchor)) return;
+  const author = authorFromHover(anchor);
+  if (!author) return;
+  hoverHandle = author.handle.toLowerCase();
+  if (!hoverUi) hoverUi = createHoverCard();
+  if (!hoverUi) return;
+  const ratioEnabled = snapshot?.settings?.partnershipRatioEnabled === true;
+  const base = {
+    handle: author.handle,
+    displayName: author.displayName,
+    lang,
+    record: recordForHandle(author.handle),
+    liveFollowed: author.followed,
+    settings: snapshot?.settings,
+    ratioEnabled,
+    loading: ratioEnabled,
+    visiblePaid: visiblePaidLabel(author.labelRoot),
+  };
+  const model = describeHoverCard(base);
+  if (!model || token !== hoverToken) return;
+  hoverUi.show(model, anchor);
+  if (!ratioEnabled) return;
+  const result = await send({ type: "PARTNERSHIP_STATS", handle: author.handle });
+  if (token !== hoverToken || !document.contains(anchor)) return;
+  const partnership = result?.partnership?.status
+    ? result.partnership
+    : { status: "unavailable", reason: "network" };
+  const next = describeHoverCard({ ...base, loading: false, partnership });
+  if (next) hoverUi.show(next, anchor);
+}
+
 export async function start() {
   dict = await loadDict();
   overlay = createOverlay();
@@ -1193,7 +1346,30 @@ export async function start() {
   document.addEventListener("mouseover", (event) => {
     const article = event.target?.closest?.(TWEET_ARTICLE_SELECTOR);
     if (article && !isNestedTweetArticle(article)) hovered = article;
+    const node = elementFrom(event.target);
+    if (node?.closest?.("[data-xsl-hover]")) {
+      clearTimeout(hoverHideTimer);
+      return;
+    }
+    const anchor = hoverAuthorAnchor(event.target);
+    if (anchor) scheduleHover(anchor);
   }, true);
+  document.addEventListener("mouseout", (event) => {
+    const node = elementFrom(event.target);
+    if (!node?.closest) return;
+    if (!hoverAuthorAnchor(node) && !node.closest("[data-xsl-hover]")) return;
+    const rel = elementFrom(event.relatedTarget);
+    if (rel?.closest?.("[data-xsl-hover]")) return;
+    if (rel && hoverAuthorAnchor(rel)) return;
+    clearTimeout(hoverShowTimer);
+    clearTimeout(hoverHideTimer);
+    const token = hoverToken;
+    hoverHideTimer = setTimeout(() => {
+      if (token !== hoverToken) return;
+      dismissHover();
+    }, 220);
+  }, true);
+  window.addEventListener("scroll", () => dismissHover(), true);
   document.addEventListener("focusin", (event) => {
     const article = event.target?.closest?.(TWEET_ARTICLE_SELECTOR);
     if (article && !isNestedTweetArticle(article)) hovered = article;
