@@ -1,0 +1,107 @@
+:root {
+  color-scheme: light;
+  --ink: #1c1915;
+  --muted: #6d645b;
+  --paper: #f3eee4;
+  --card: #fffaf3;
+  --line: #e3d5c3;
+  --stamp: #c2410c;
+  --margin: #9f1239;
+  --ok: #3f6212;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--ink);
+  background:
+    linear-gradient(90deg, transparent 28px, rgba(159, 18, 57, 0.35) 28px, rgba(159, 18, 57, 0.35) 30px, transparent 30px),
+    var(--paper);
+  font: 15px/1.5 ui-sans-serif, "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;
+}
+
+.wrap { max-width: 980px; margin: 0 auto; padding: 28px 20px 64px 48px; }
+
+header.mast { display: flex; gap: 16px; align-items: center; margin-bottom: 18px; }
+
+.stamp {
+  width: 54px; height: 64px; border: 2px solid #1c1410; border-radius: 6px 10px 10px 6px;
+  background:
+    linear-gradient(#9f1239, #9f1239) 8px 0 / 3px 100% no-repeat,
+    repeating-linear-gradient(#efe6d6, #efe6d6 10px, #e7dccb 11px),
+    #f7f1e6;
+  position: relative; flex: 0 0 auto;
+}
+
+.stamp::after {
+  content: "";
+  position: absolute; left: 16px; right: 8px; top: 22px; height: 4px;
+  background: #e85d04; transform: rotate(-32deg);
+  box-shadow: 0 14px 0 #e85d04;
+}
+
+h1, h2 { font-family: "Iowan Old Style", Palatino, "Songti SC", "Noto Serif SC", serif; font-weight: 650; }
+h1 { margin: 0; font-size: 34px; line-height: 1.05; }
+h2 { margin: 0 0 8px; font-size: 22px; }
+.lede { margin: 6px 0 0; max-width: 62ch; color: var(--muted); }
+
+nav { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 18px 0; position: sticky; top: 0; background: rgba(243, 238, 228, 0.92); padding: 8px 0; z-index: 2; }
+nav button { margin-left: auto; }
+nav a { color: var(--ink); text-decoration: none; border-bottom: 1px solid transparent; }
+nav a:hover { border-color: var(--stamp); }
+
+section {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 16px;
+  margin: 14px 0;
+}
+
+.grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.stat { border: 1px solid var(--line); border-radius: 12px; padding: 10px; background: #fff; }
+.stat b { display: block; font-size: 22px; }
+.stat span, .hint, .quiet { color: var(--muted); }
+.hint { margin: 6px 0 0; font-size: 13px; }
+
+.risk { border-left: 3px solid var(--stamp); padding-left: 10px; }
+
+label { display: grid; gap: 4px; margin: 10px 0; font-size: 14px; }
+.checks label, .inline { display: flex; gap: 8px; align-items: flex-start; }
+input[type="text"], input[type="search"], input[type="number"], input[type="password"], input[type="url"], select, textarea {
+  width: 100%; border: 1px solid var(--line); background: white; color: var(--ink);
+  border-radius: 10px; padding: 8px 10px; font: inherit;
+}
+textarea { min-height: 64px; resize: vertical; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.grow { flex: 1 1 180px; }
+
+button, .file {
+  border: 1px solid var(--ink); background: transparent; color: var(--ink);
+  border-radius: 999px; padding: 7px 12px; font: inherit; cursor: pointer;
+}
+button.primary { background: var(--stamp); color: white; border-color: var(--stamp); }
+button.danger { border-color: var(--margin); color: var(--margin); }
+button:disabled { opacity: 0.45; }
+
+.account, .pack, .queue-item, .log-item {
+  border-top: 1px solid var(--line); padding: 10px 0;
+}
+.handle { font-weight: 750; }
+.meta { color: var(--muted); font-size: 13px; }
+.tag { display: inline-flex; gap: 6px; align-items: center; margin: 4px 6px 0 0; padding: 2px 8px; border-radius: 999px; background: #f6ece1; }
+.evidence { margin: 6px 0 0 12px; color: var(--muted); font-size: 13px; }
+.pattern { display: grid; grid-template-columns: 110px 110px 1fr auto; gap: 6px; margin-top: 6px; }
+#status { min-height: 1.3em; font-weight: 650; }
+#status.bad { color: var(--margin); }
+#status.ok { color: var(--ok); }
+
+@media (max-width: 800px) {
+  .wrap { padding: 20px 14px 48px 36px; }
+  .grid, .pattern { grid-template-columns: 1fr; }
+  h1 { font-size: 28px; }
+}

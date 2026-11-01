@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { listBookmarkAccounts } from '@/db/posts'
+import { UNKNOWN_ACCOUNT } from '@/shared/accounts'
 import { NO_FOLDER } from '@/search/query-parser'
 import type { Filters } from '@/search/engine'
 import type { Library } from '../../hooks'
@@ -14,6 +16,8 @@ export interface LibraryFilterState {
   postType: '' | 'bookmark' | 'timeline'
   authors: string
   availability: 'all' | 'active' | 'tweet_deleted' | 'unbookmarked'
+  /** '' | screen name | UNKNOWN_ACCOUNT */
+  account: string
 }
 
 export const EMPTY_FILTER: LibraryFilterState = {
@@ -26,6 +30,7 @@ export const EMPTY_FILTER: LibraryFilterState = {
   postType: '',
   authors: '',
   availability: 'all',
+  account: '',
 }
 
 function toYmd(d: Date): string {
@@ -60,8 +65,29 @@ export function filterStateToSearch(f: LibraryFilterState): {
       has: has ? [...has] : undefined,
       status: f.availability,
       source: f.postType || 'all',
+      accounts: f.account ? [f.account] : undefined,
     },
   }
+}
+
+export function filterChips(
+  f: LibraryFilterState,
+  t: (k: 'account_filter' | 'account_unknown' | 'folder' | 'author' | 'lib_content_type' | 'lib_post_type' | 'lib_availability' | 'unfiled') => string,
+): { id: string; label: string; clear: LibraryFilterState }[] {
+  const chips: { id: string; label: string; clear: LibraryFilterState }[] = []
+  if (f.account) {
+    chips.push({
+      id: 'account',
+      label: `${t('account_filter')}: ${f.account === UNKNOWN_ACCOUNT ? t('account_unknown') : '@' + f.account}`,
+      clear: { ...f, account: '' },
+    })
+  }
+  if (f.folder) chips.push({ id: 'folder', label: `${t('folder')}: ${f.folder === NO_FOLDER ? t('unfiled') : f.folder}`, clear: { ...f, folder: '' } })
+  if (f.authors.trim()) chips.push({ id: 'authors', label: `${t('author')}: ${f.authors}`, clear: { ...f, authors: '' } })
+  if (f.contentType) chips.push({ id: 'content', label: f.contentType, clear: { ...f, contentType: '' } })
+  if (f.postType) chips.push({ id: 'postType', label: f.postType, clear: { ...f, postType: '' } })
+  if (f.availability !== 'all') chips.push({ id: 'availability', label: f.availability, clear: { ...f, availability: 'all' } })
+  return chips
 }
 
 export function FilterPanel({
@@ -79,6 +105,11 @@ export function FilterPanel({
 }) {
   const t = useT()
   const [draft, setDraft] = useState(value)
+  const [accounts, setAccounts] = useState<{ account: string; count: number }[]>([])
+  useEffect(() => {
+    if (!open) return
+    void listBookmarkAccounts().then(setAccounts)
+  }, [open])
   useEffect(() => {
     if (open) setDraft(value)
   }, [open, value])
@@ -202,6 +233,18 @@ export function FilterPanel({
               onChange={(e) => set('authors', e.target.value)}
               placeholder={t('lib_user_ids_ph')}
             />
+          </label>
+          <label>
+            {t('account_filter')}
+            <select value={draft.account} onChange={(e) => set('account', e.target.value)}>
+              <option value="">{t('all')}</option>
+              <option value={UNKNOWN_ACCOUNT}>{t('account_unknown')}</option>
+              {accounts.map((row) => (
+                <option key={row.account} value={row.account}>
+                  @{row.account} ({row.count})
+                </option>
+              ))}
+            </select>
           </label>
           <label>
             {t('lib_availability')}

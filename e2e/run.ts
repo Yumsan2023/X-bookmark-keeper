@@ -153,7 +153,7 @@ try {
     await pg.goto(ext(file))
     await sleep(1200)
     await pg.screenshot({ path: `${OUT}/${name}.png` })
-    check(`${name} 页面渲染`, (await text(pg)).includes('Bookmark Keeper'))
+    check(`${name} 页面渲染`, (await text(pg)).includes('X Toolkit'))
   }
   check('页面无未捕获异常', errors.length === 0, errors.join(' | '))
 } finally {

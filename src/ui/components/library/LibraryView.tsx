@@ -2,6 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { collectAllMatching } from '@/search/service'
 import type { SortKey } from '@/search/engine'
 import type { Hit } from '@/search/engine'
+import { duplicateGroups, extraIds, groupByOriginal, type QuoteGroup } from '@/library/quote-groups'
+import type { MediaItem } from '@/shared/types'
+import { AccountBadges, dragBookmarkIds } from '../AccountBadges'
+import { confirmUnbookmark } from '../../unbookmark'
 import {
   DEFAULT_LIBRARY_COLUMNS,
   STORAGE_KEYS,
@@ -17,6 +21,7 @@ import { ExportPanel, type ExportScope } from './ExportPanel'
 import {
   EMPTY_FILTER,
   FilterPanel,
+  filterChips,
   filterStateToSearch,
   type LibraryFilterState,
 } from './FilterPanel'
@@ -35,6 +40,23 @@ const COL_LABEL: Record<LibraryColumnId, Key> = {
 }
 
 const PAGE_SIZES = [20, 50, 100]
+type LibView = 'list' | 'gallery' | 'group' | 'dupes'
+
+const VIEWS: { id: LibView; icon: string; label: 'view_list' | 'view_gallery' | 'view_group' | 'view_dupes' }[] = [
+  { id: 'list', icon: '☰', label: 'view_list' },
+  { id: 'gallery', icon: '▦', label: 'view_gallery' },
+  { id: 'group', icon: '⧉', label: 'view_group' },
+  { id: 'dupes', icon: '⚇', label: 'view_dupes' },
+]
+
+function galleryMedia(posts: Post[]): { post: Post; media: MediaItem; index: number; fromQuote: boolean }[] {
+  const items: { post: Post; media: MediaItem; index: number; fromQuote: boolean }[] = []
+  for (const post of posts) {
+    post.media?.forEach((media, index) => items.push({ post, media, index, fromQuote: false }))
+    post.quoted?.media?.forEach((media, index) => items.push({ post, media, index, fromQuote: true }))
+  }
+  return items
+}
 
 function loadColumns(): LibraryColumnId[] {
   try {
@@ -74,6 +96,9 @@ export function LibraryView({
   const [total, setTotal] = useState(0)
   const [searching, setSearching] = useState(false)
   const [info, setInfo] = useState('')
+  const [view, setView] = useState<LibView>('list')
+  const [groups, setGroups] = useState<QuoteGroup[]>([])
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set())
   const searchSeq = useRef(0)
   const colsRef = useRef<HTMLDivElement>(null)
 
@@ -93,7 +118,7 @@ export function LibraryView({
     return () => clearTimeout(h)
   }, [query])
 
-  useEffect(() => setPage(0), [debounced, filter, pageSize])
+  useEffect(() => setPage(0), [debounced, filter, pageSize, view])
 
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
@@ -107,6 +132,7 @@ export function LibraryView({
   const sort: SortKey = sortOldest ? 'created_asc' : 'saved_desc'
 
   useEffect(() => {
+    if (view !== 'list' && view !== 'gallery') return
     const seq = ++searchSeq.current
     setSearching(true)
     void lib.search({ query: debounced, filters, sort, page, pageSize }).then((r) => {
@@ -115,18 +141,31 @@ export function LibraryView({
       setTotal(r.total)
       setSearching(false)
     })
-  }, [lib, lib.version, debounced, filters, sort, page, pageSize])
+  }, [lib, lib.version, debounced, filters, sort, page, pageSize, view])
+
+  useEffect(() => {
+    if (view === 'list' || view === 'gallery') return
+    const seq = ++searchSeq.current
+    setSearching(true)
+    void collectAllMatching(lib.engine, { query: debounced, filters, sort }).then((posts) => {
+      if (seq !== searchSeq.current) return
+      const grouped = groupByOriginal(posts)
+      const rows = view === 'dupes' ? duplicateGroups(grouped) : grouped
+      setGroups(rows)
+      setTotal(rows.length)
+      setSearching(false)
+    })
+  }, [lib.engine, lib.version, debounced, filters, sort, view])
 
   useEffect(() => {
     setSelectedCache((cur) => {
       const n = new Map(cur)
-      for (const h of hits) {
-        if (selected.has(h.post.tweet_id)) n.set(h.post.tweet_id, h.post)
-      }
+      const visible = view === 'list' || view === 'gallery' ? hits.map((h) => h.post) : groups.flatMap((g) => g.posts)
+      for (const post of visible) if (selected.has(post.tweet_id)) n.set(post.tweet_id, post)
       for (const id of n.keys()) if (!selected.has(id)) n.delete(id)
       return n
     })
-  }, [hits, selected])
+  }, [hits, selected, groups, view])
 
   const pages = Math.max(1, Math.ceil(total / pageSize))
   const flash = (m: string) => {
@@ -174,14 +213,17 @@ export function LibraryView({
   }
 
   const onUnbookmark = async (ids: string[]) => {
-    if (!ids.length) return
-    if (settings.confirmBulkDelete && !(await confirm(`${t('confirm_unbookmark')} (${ids.length})`))) return
-    const hard = await confirm(t('confirm_unbookmark_hard'))
-    const r = await bg({ type: 'bookmarks/delete', tweetIds: ids, removeLocal: hard })
-    flash(r.ok ? `${t('task')}…` : r.error ?? 'error')
-    setSelected(new Set())
-    await lib.reload()
+    const message = await confirmUnbookmark({ ids, confirmBulk: settings.confirmBulkDelete, t, confirm })
+    if (message) flash(message)
+    if (message && !message.startsWith(t('del_no_account'))) {
+      setSelected(new Set())
+      await lib.reload()
+    }
   }
+
+  const pageGroups = view === 'list' || view === 'gallery' ? [] : groups.slice(page * pageSize, page * pageSize + pageSize)
+  const gallery = galleryMedia(hits.map((h) => h.post))
+  const chips = filterChips(filter, t)
 
   const visible = columns
   const show = (id: LibraryColumnId) => visible.includes(id)
@@ -210,9 +252,18 @@ export function LibraryView({
 
       <div className="lib-toolbar">
         <div className="lib-toolbar-group">
-          <button type="button" className="lib-tool active" title={t('tab_library')}>
-            ☰
-          </button>
+          {VIEWS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={view === item.id ? 'lib-tool active' : 'lib-tool'}
+              title={t(item.label)}
+              aria-pressed={view === item.id}
+              onClick={() => setView(item.id)}
+            >
+              {item.icon} <span className="lib-tool-label">{t(item.label)}</span>
+            </button>
+          ))}
         </div>
         <div className="lib-toolbar-group">
           <button
@@ -254,6 +305,25 @@ export function LibraryView({
             </span>
           </button>
         </div>
+        {view === 'dupes' && (
+          <button
+            type="button"
+            className="lib-btn ghost"
+            onClick={() => {
+              const ids = groups.flatMap((group) => extraIds(group))
+              setSelected(new Set(ids))
+              setSelectedCache((cur) => {
+                const next = new Map(cur)
+                for (const group of groups) {
+                  for (const post of group.posts) if (ids.includes(post.tweet_id)) next.set(post.tweet_id, post)
+                }
+                return next
+              })
+            }}
+          >
+            {t('dupes_select_extras')}
+          </button>
+        )}
         {selected.size > 0 && (
           <div className="lib-toolbar-group lib-batch">
             <b className="muted">{t('selected')} {selected.size}</b>
@@ -301,6 +371,30 @@ export function LibraryView({
         </div>
       </div>
 
+      {chips.length > 0 && (
+        <div className="filter-chips-bar" role="list">
+          {chips.map((chip) => (
+            <button
+              key={chip.id}
+              type="button"
+              className="filter-chip"
+              role="listitem"
+              title={`${t('clear_filter')}: ${chip.label}`}
+              onClick={() => setFilter(chip.clear)}
+            >
+              <span>{chip.label}</span>
+              <span className="filter-chip-x" aria-hidden>
+                ×
+              </span>
+            </button>
+          ))}
+          <button type="button" className="filter-chip-clear-all" onClick={() => setFilter(EMPTY_FILTER)}>
+            {t('clear_all_filters')}
+          </button>
+        </div>
+      )}
+      {view === 'dupes' && <p className="muted small">{t('dupes_hint')}</p>}
+
       {info && <div className="info">{info}</div>}
       {lib.indexing && (
         <div className="info">
@@ -308,6 +402,37 @@ export function LibraryView({
         </div>
       )}
 
+      {view === 'gallery' ? (
+        gallery.length ? (
+          <div className="media-gallery">
+            {gallery.map(({ post, media, index, fromQuote }) => {
+              const on = selected.has(post.tweet_id)
+              return (
+                <div
+                  key={`${post.tweet_id}:${fromQuote ? 'q' : 'm'}:${index}`}
+                  className={`media-gallery-item ${on ? 'sel' : ''}`}
+                  draggable
+                  onDragStart={(e) => dragBookmarkIds(e, post.tweet_id, selected)}
+                >
+                  <label className="media-gallery-check">
+                    <input type="checkbox" checked={on} onChange={(e) => toggleRow(post.tweet_id, e.target.checked)} />
+                  </label>
+                  <a href={post.url} target="_blank" rel="noreferrer" className="media-gallery-thumb" title={`@${post.screen_name}`}>
+                    <img src={media.url} alt="" loading="lazy" referrerPolicy="no-referrer" />
+                    {media.type !== 'photo' && <span className="play">▶</span>}
+                    {fromQuote && <span className="media-gallery-q">↪</span>}
+                  </a>
+                  <div className="media-gallery-meta muted">@{post.screen_name}</div>
+                </div>
+              )
+            })}
+          </div>
+        ) : (
+          <p className="lib-empty muted">{searching ? '…' : t('gallery_empty')}</p>
+        )
+      ) : null}
+
+      {view !== 'gallery' && (
       <div className="lib-table-wrap">
         <table className="lib-table">
           <thead>
@@ -334,12 +459,17 @@ export function LibraryView({
             </tr>
           </thead>
           <tbody>
-            {lib.loading ? null : lib.totalCount === 0 ? (
+            {lib.loading || searching ? null : lib.totalCount === 0 ? (
               <tr>
                 <td colSpan={20}>
-                  <div className="lib-empty">
+                  <div className="lib-empty empty-rich">
                     <div className="lib-empty-icon">📥</div>
-                    <p>{t('lib_empty')}</p>
+                    <p className="empty-title">{t('lib_empty')}</p>
+                    <ol className="empty-steps">
+                      <li>{t('empty_hint_1')}</li>
+                      <li>{t('empty_hint_2')}</li>
+                      <li>{t('empty_hint_3')}</li>
+                    </ol>
                     <button
                       type="button"
                       className="lib-btn primary"
@@ -348,7 +478,7 @@ export function LibraryView({
                         onSync?.()
                       }}
                     >
-                      ↻ {t('lib_sync_bookmarks')}
+                      ↻ {t('go_sync')}
                     </button>
                   </div>
                 </td>
@@ -356,15 +486,20 @@ export function LibraryView({
             ) : total === 0 && !searching ? (
               <tr>
                 <td colSpan={20}>
-                  <p className="lib-empty">{t('no_results')}</p>
+                  <p className="lib-empty">{t(view === 'dupes' ? 'dupes_none' : 'no_results')}</p>
                 </td>
               </tr>
-            ) : (
+            ) : view === 'list' ? (
               hits.map((h, i) => {
                 const p = h.post
                 const idx = page * pageSize + i + 1
                 return (
-                  <tr key={p.tweet_id} className={selected.has(p.tweet_id) ? 'sel' : ''}>
+                  <tr
+                    key={p.tweet_id}
+                    className={selected.has(p.tweet_id) ? 'sel lib-row' : 'lib-row'}
+                    draggable
+                    onDragStart={(e) => dragBookmarkIds(e, p.tweet_id, selected)}
+                  >
                     <td className="lib-check">
                       <input
                         type="checkbox"
@@ -383,6 +518,9 @@ export function LibraryView({
                         <div className="lib-user-meta">
                           <b>{p.name || p.screen_name}</b>
                           <span className="muted">@{p.screen_name}</span>
+                          <span className="lib-acct-badges">
+                            <AccountBadges accounts={p.accounts} />
+                          </span>
                         </div>
                       </td>
                     )}
@@ -433,10 +571,92 @@ export function LibraryView({
                   </tr>
                 )
               })
+            ) : (
+              pageGroups.map((group, i) => {
+                const idx = page * pageSize + i + 1
+                if (group.posts.length === 1) {
+                  const p = group.posts[0]
+                  return (
+                    <tr
+                      key={p.tweet_id}
+                      className={selected.has(p.tweet_id) ? 'sel lib-row' : 'lib-row'}
+                      draggable
+                      onDragStart={(e) => dragBookmarkIds(e, p.tweet_id, selected)}
+                    >
+                      <td className="lib-check">
+                        <input type="checkbox" checked={selected.has(p.tweet_id)} onChange={(e) => toggleRow(p.tweet_id, e.target.checked)} />
+                      </td>
+                      {show('index') && <td className="num">{idx}</td>}
+                      <td colSpan={20}>
+                        <a href={p.url} target="_blank" rel="noreferrer" className="lib-post-text">
+                          @{p.screen_name} {p.text?.slice(0, 180)}
+                        </a>
+                        <AccountBadges accounts={p.accounts} />
+                      </td>
+                    </tr>
+                  )
+                }
+                const ids = group.posts.map((p) => p.tweet_id)
+                const allOn = ids.every((id) => selected.has(id))
+                const open = openGroups.has(group.key)
+                const infoText = `${group.info.article_title ? `${group.info.article_title} — ` : ''}${group.info.text || ''}`
+                return (
+                  <tr key={`g:${group.key}`} className="lib-group-row">
+                    <td className="lib-check">
+                      <input
+                        type="checkbox"
+                        checked={allOn}
+                        onChange={(e) => {
+                          setSelected((cur) => {
+                            const next = new Set(cur)
+                            for (const id of ids) e.target.checked ? next.add(id) : next.delete(id)
+                            return next
+                          })
+                        }}
+                      />
+                    </td>
+                    <td colSpan={20} className="lib-group-cell">
+                      <button
+                        type="button"
+                        className="lib-btn ghost small-inline"
+                        onClick={() =>
+                          setOpenGroups((cur) => {
+                            const next = new Set(cur)
+                            next.has(group.key) ? next.delete(group.key) : next.add(group.key)
+                            return next
+                          })
+                        }
+                      >
+                        {open ? '▾' : '▸'} {t(open ? 'group_collapse' : 'group_expand')}
+                      </button>
+                      <span className="badge">{t('group_quotes', { n: group.quoting.length })}</span>
+                      {group.original && <span className="badge">{t('group_original_saved')}</span>}
+                      {group.info.article_title && <span className="badge">📰 {t('quoted_article')}</span>}
+                      <b>{group.info.name || group.info.screen_name || '—'}</b>
+                      {group.info.screen_name && <span className="muted"> @{group.info.screen_name}</span>}
+                      <a href={group.info.url} target="_blank" rel="noreferrer" className="lib-post-text lib-group-text">
+                        {infoText.slice(0, 200) || group.info.url}
+                        {infoText.length > 200 ? '…' : ''}
+                      </a>
+                      {!group.original && <span className="muted small"> {t('group_original_missing')}</span>}
+                      {open &&
+                        group.posts.map((p) => (
+                          <div key={p.tweet_id} className="lib-child-row">
+                            <label>
+                              <input type="checkbox" checked={selected.has(p.tweet_id)} onChange={(e) => toggleRow(p.tweet_id, e.target.checked)} /> @{p.screen_name}{' '}
+                              {p.text?.slice(0, 120)}
+                            </label>
+                          </div>
+                        ))}
+                    </td>
+                  </tr>
+                )
+              })
             )}
           </tbody>
         </table>
       </div>
+      )}
 
       <footer className="lib-footer">
         <div className="lib-pager">

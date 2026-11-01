@@ -159,7 +159,14 @@ function parseQuoted(tweet: AnyObj): QuotedPost | undefined {
   const user = parseUser(q)
   const id = String(q.rest_id ?? q.legacy?.id_str ?? '')
   if (!id) return undefined
-  return { tweet_id: id, screen_name: user.screen_name, name: user.name, text: extractText(q).text }
+  const quoted: QuotedPost = { tweet_id: id, screen_name: user.screen_name, name: user.name, text: extractText(q).text }
+  const article = q.article?.article_results?.result
+  if (article?.rest_id) quoted.article_id = String(article.rest_id)
+  if (article?.title) quoted.article_title = String(article.title)
+  if (article?.preview_text) quoted.article_preview = String(article.preview_text)
+  const media = parseMedia(q.legacy)
+  if (media.length) quoted.media = media
+  return quoted
 }
 
 

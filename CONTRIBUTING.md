@@ -1,6 +1,6 @@
 # 贡献指南 / Contributing
 
-感谢你对 **Bookmark Keeper** 的兴趣。本项目是 Chrome MV3 扩展（X / Twitter 书签与公开发帖本地管理）。
+感谢你对 **X Toolkit** 的兴趣。本项目是 Chrome MV3 扩展（X / Twitter 书签、公开发帖，以及本地打击账本）。
 
 ## 开始之前
 

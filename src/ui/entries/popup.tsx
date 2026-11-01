@@ -11,12 +11,15 @@ function Popup({ themeClass }: { themeClass: string }) {
   const lib = useLibrary()
   return (
     <div className={`popup ${themeClass}`}>
-      <h1>🔖 Bookmark Keeper</h1>
-      <p className="muted">{t('total_in_library')} {lib.posts.length}</p>
+      <h1>🔖 {t('app_title')}</h1>
+      <p className="muted">{t('app_subtitle')}</p>
+      <p className="muted">{t('total_in_library')} {lib.totalCount}</p>
       <SyncControls compact />
       <ProgressBox />
+      <p className="muted">{t('strike_popup_help')}</p>
       <div className="row">
         <button className="primary" onClick={() => chrome.runtime.openOptionsPage()}>{t('open_library')}</button>
+        <button onClick={() => chrome.tabs.create({ url: chrome.runtime.getURL('options.html#strike') })}>{t('tab_strike')}</button>
         <button onClick={async () => {
           const w = await chrome.windows.getCurrent()
           await chrome.sidePanel.open({ windowId: w.id! })

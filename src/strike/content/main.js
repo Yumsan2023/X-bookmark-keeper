@@ -1,0 +1,600 @@
+import { send } from "../lib/client.js";
+import { parseArticle } from "../lib/domparse.js";
+import { loadDict, translate } from "../lib/i18n.js";
+import {
+  canonicalTag,
+  contentHash,
+  eventMatchesShortcut,
+  isTypingTarget,
+  matchRules,
+  resolveLang,
+  tagLabel,
+} from "../lib/pure.js";
+import { performPlatformAction } from "./act.js";
+import { createOverlay, mountBar, openChoice, openPicker, toast } from "./view.js";
+
+const expanded = new Set();
+const aiAsked = new Set();
+const aiResults = new Map();
+const seenSent = new Set();
+let dict = {};
+let snapshot = null;
+let lang = "en";
+let hovered = null;
+let overlay = null;
+let overlayBusy = false;
+let pumping = false;
+let capNotified = "";
+let aiInflight = 0;
+let scanTimer = 0;
+
+function t(key, vars) {
+  return translate(dict, lang, key, vars);
+}
+
+function toneOf(name) {
+  if (name === "Spam") return "spam";
+  if (name === "Marketing") return "marketing";
+  return "custom";
+}
+
+function pageContext() {
+  const bio = document.querySelector('[data-testid="UserDescription"]');
+  const primary = document.querySelector('[data-testid="primaryColumn"]') || document;
+  const unfollow = primary.querySelector('[data-testid$="-unfollow"], [data-testid="unfollow"]');
+  const follow = [...primary.querySelectorAll('[data-testid$="-follow"], [data-testid="follow"]')]
+    .find((node) => !(node.getAttribute("data-testid") || "").endsWith("-unfollow"));
+  return {
+    pathname: location.pathname,
+    profileBio: bio ? (bio.innerText || "") : "",
+    profileFollowed: unfollow ? true : follow ? false : null,
+  };
+}
+
+function describe(article) {
+  const parsed = parseArticle(article, pageContext());
+  if (!parsed) return null;
+  if (!parsed.tweetId) {
+    parsed.tweetId = `t${contentHash([parsed.handle, parsed.text]).slice(0, 18)}`;
+    parsed.synthetic = true;
+  }
+  parsed.key = parsed.tweetId;
+  return parsed;
+}
+
+function applySnapshot(next) {
+  snapshot = next || null;
+  lang = resolveLang(snapshot?.settings?.language, navigator.language);
+  scan();
+}
+
+async function loadSnapshot() {
+  const got = await chrome.storage.local.get("xsl");
+  if (!got.xsl) {
+    await send({ type: "ENSURE" });
+    const again = await chrome.storage.local.get("xsl");
+    applySnapshot(again.xsl);
+    return;
+  }
+  applySnapshot(got.xsl);
+}
+
+function indexOf(userId) {
+  return snapshot?.index?.[userId] || null;
+}
+
+function tweetTags(tweetId) {
+  return snapshot?.tweetTags?.[tweetId]?.tags || [];
+}
+
+function stop(event) {
+  event.preventDefault();
+  event.stopPropagation();
+}
+
+function placeholder(article, meta, record) {
+  let node = article.querySelector(":scope > [data-xsl-placeholder]");
+  if (!node) {
+    node = document.createElement("div");
+    node.dataset.xslPlaceholder = "1";
+    node.dataset.xslKeep = "1";
+    article.prepend(node);
+  }
+  const bits = Object.entries(record?.counts || {}).map(([name, count]) => `${tagLabel(name, lang)} ${count}`);
+  const signature = `${lang}|${meta.handle}|${bits.join(",")}`;
+  if (node.dataset.sig === signature) return;
+  node.dataset.sig = signature;
+  node.replaceChildren();
+  const title = document.createElement("div");
+  title.className = "xsl-ph-title";
+  title.textContent = t("collapsed", { handle: meta.handle });
+  const detail = document.createElement("div");
+  detail.className = "xsl-ph-meta";
+  detail.textContent = bits.join(" · ") || t("hiddenOn");
+  const show = document.createElement("button");
+  show.type = "button";
+  show.textContent = t("showOnce");
+  show.addEventListener("click", (event) => {
+    stop(event);
+    expanded.add(meta.key);
+    delete article.dataset.xslCollapsed;
+    node.remove();
+  });
+  const unhide = document.createElement("button");
+  unhide.type = "button";
+  unhide.textContent = t("unhide");
+  unhide.addEventListener("click", async (event) => {
+    stop(event);
+    await send({ type: "SET_HIDDEN", userId: meta.userId, handle: meta.handle, hidden: false });
+    toast(overlay, t("hiddenSaved"));
+  });
+  for (const button of [show, unhide]) {
+    button.addEventListener("pointerdown", stop);
+  }
+  node.append(title, detail, show, unhide);
+}
+
+function syncHidden(article, meta) {
+  const record = indexOf(meta.userId);
+  const hide = !!(record && record.hidden) && !expanded.has(meta.key);
+  if (hide) {
+    article.dataset.xslCollapsed = "1";
+    placeholder(article, meta, record);
+  } else if (article.dataset.xslCollapsed) {
+    delete article.dataset.xslCollapsed;
+    article.querySelector(":scope > [data-xsl-placeholder]")?.remove();
+  }
+}
+
+function suspectFor(meta) {
+  const settings = snapshot?.settings;
+  if (!settings?.rulesEnabled) return null;
+  const matched = matchRules(settings.keywordPacks, { text: meta.text, handle: meta.handle, bio: meta.bio });
+  if (!matched.suspect) return null;
+  return matched;
+}
+
+function rememberFollow(meta) {
+  const record = indexOf(meta.userId);
+  if (!record || meta.followed == null || record.followed === meta.followed) return;
+  const key = `${meta.userId}:${meta.followed}`;
+  if (seenSent.has(key)) return;
+  seenSent.add(key);
+  send({
+    type: "SEEN",
+    userId: meta.userId,
+    handle: meta.handle,
+    displayName: meta.displayName,
+    followed: meta.followed,
+  });
+}
+
+async function withOverlay(task) {
+  overlayBusy = true;
+  try {
+    return await task();
+  } finally {
+    overlayBusy = false;
+  }
+}
+
+async function afterThreshold(result, meta) {
+  const threshold = result.threshold;
+  if (!threshold?.crossed) return;
+  const tag = tagLabel(threshold.tag, lang);
+  if (threshold.skipped === "whitelist") {
+    toast(overlay, t("skipWhitelist", { handle: meta.handle }));
+    return;
+  }
+  if (threshold.skipped === "following") {
+    toast(overlay, t("skipFollowing", { handle: meta.handle }));
+    return;
+  }
+  if (threshold.mode === "prompt-only") {
+    toast(overlay, t("promptOnly", { handle: meta.handle, tag, count: threshold.count, n: threshold.n }));
+    return;
+  }
+  if (threshold.mode === "auto") {
+    const applied = await send({
+      type: "APPLY_ACTIONS",
+      userId: meta.userId,
+      handle: meta.handle,
+      hide: threshold.suggest.hide,
+      mute: threshold.suggest.mute,
+      block: threshold.suggest.block,
+      reason: "threshold-auto",
+    });
+    const actions = (applied.done || []).map((name) => t(name === "hide" ? "hideAction" : name)).join(lang === "zh" ? "、" : ", ");
+    toast(overlay, t("autoDone", { handle: meta.handle, actions: actions || t("justRecord") }));
+    if ((applied.done || []).some((name) => name === "mute" || name === "block")) pump();
+    return;
+  }
+  const settings = snapshot?.settings || {};
+  const choice = await withOverlay(() => openChoice(overlay, {
+    title: t("thresholdTitle", { tag }),
+    body: t("thresholdBody", { handle: meta.handle, tag, count: threshold.count, n: threshold.n }),
+    warning: threshold.followed == null ? t("thresholdWarnUnknown") : "",
+    checks: [
+      { id: "hide", label: t("hideLocal"), checked: !!threshold.suggest.hide, hint: "" },
+      {
+        id: "mute",
+        label: t("mute"),
+        checked: !!threshold.suggest.mute,
+        disabled: !settings.enablePlatformActions,
+        hint: t("muteHint"),
+      },
+      {
+        id: "block",
+        label: t("block"),
+        checked: !!threshold.suggest.block,
+        disabled: !settings.enablePlatformActions,
+        hint: t("blockHint"),
+      },
+    ],
+    confirm: t("actConfirm"),
+    neutral: t("justRecord"),
+    cancel: t("cancel"),
+  }));
+  if (!choice?.confirm) return;
+  const applied = await send({
+    type: "APPLY_ACTIONS",
+    userId: meta.userId,
+    handle: meta.handle,
+    hide: !!choice.checks.hide,
+    mute: !!choice.checks.mute,
+    block: !!choice.checks.block,
+    reason: "threshold-confirm",
+  });
+  if (!applied.ok && applied.error === "platform-off") toast(overlay, t("platformOff"));
+  else toast(overlay, t("confirmed", { handle: meta.handle }));
+  if (choice.checks.mute || choice.checks.block) pump();
+}
+
+async function markTag(meta, tag, source) {
+  const clean = canonicalTag(tag);
+  if (!clean) {
+    toast(overlay, t("bad-tag"));
+    return;
+  }
+  const result = await send({
+    type: "MARK",
+    userId: meta.userId,
+    handle: meta.handle,
+    displayName: meta.displayName,
+    tweetId: meta.tweetId,
+    url: meta.url,
+    textSnippet: meta.text,
+    tag: clean,
+    followed: meta.followed,
+    source,
+  });
+  if (!result?.ok) {
+    toast(overlay, t(result?.error || "error"));
+    return;
+  }
+  if (result.already) {
+    toast(overlay, t("already", { tag: tagLabel(clean, lang) }));
+    return;
+  }
+  const count = result.account?.tags?.find((row) => row.name === clean)?.count || result.threshold?.count || 1;
+  toast(overlay, t("marked", { handle: meta.handle, tag: tagLabel(clean, lang), count }));
+  await afterThreshold(result, meta);
+}
+
+async function toggleTag(meta, tag) {
+  const clean = canonicalTag(tag);
+  if (tweetTags(meta.tweetId).includes(clean)) {
+    const result = await send({ type: "UNMARK", tweetId: meta.tweetId, tag: clean });
+    if (!result?.ok) toast(overlay, t(result?.error || "error"));
+    else toast(overlay, t("undone"));
+    return;
+  }
+  await markTag(meta, clean, "user");
+}
+
+async function openTags(article) {
+  const meta = describe(article);
+  if (!meta) {
+    toast(overlay, t("no-handle"));
+    return;
+  }
+  const record = indexOf(meta.userId);
+  const settings = snapshot?.settings || {};
+  const names = ["Spam", "Marketing", ...(settings.customTags || [])];
+  const here = new Set(tweetTags(meta.tweetId));
+  const action = await withOverlay(() => openPicker(overlay, {
+    title: `@${meta.handle}`,
+    subtitle: meta.displayName || "",
+    tags: names.map((name) => ({
+      name,
+      label: tagLabel(name, lang),
+      count: record?.counts?.[name] || 0,
+      on: here.has(name),
+    })),
+    placeholder: t("tagPh"),
+    add: t("addTag"),
+    whitelist: !!record?.whitelist,
+    whitelistLabel: t("whitelistToggle"),
+    hidden: !!record?.hidden,
+    hideLabel: record?.hidden ? t("unhide") : t("hide"),
+    cancel: t("cancel"),
+  }));
+  if (!action) return;
+  if (action.type === "toggle") await toggleTag(meta, action.tag);
+  if (action.type === "add") {
+    const added = await send({ type: "ADD_CUSTOM_TAG", name: action.name });
+    if (!added.ok) {
+      toast(overlay, t(added.error || "bad-tag"));
+      return;
+    }
+    await markTag(meta, added.tag, "user");
+  }
+  if (action.type === "whitelist") {
+    const saved = await send({
+      type: "SET_WHITELIST",
+      userId: meta.userId,
+      handle: meta.handle,
+      displayName: meta.displayName,
+      whitelist: action.value,
+    });
+    toast(overlay, saved.ok ? t("whitelistSaved") : t(saved.error || "error"));
+  }
+  if (action.type === "hide") {
+    const saved = await send({
+      type: "SET_HIDDEN",
+      userId: meta.userId,
+      handle: meta.handle,
+      hidden: action.hidden,
+    });
+    toast(overlay, saved.ok ? t("hiddenSaved") : t(saved.error || "error"));
+  }
+}
+
+async function confirmRule(article) {
+  const meta = describe(article);
+  const matched = meta && suspectFor(meta);
+  if (!matched) return;
+  const reason = matched.reasons.find((item) => item.suggestTag) || matched.reasons[0];
+  if (!reason?.suggestTag) {
+    await openTags(article);
+    return;
+  }
+  const tag = reason.suggestTag;
+  const choice = await withOverlay(() => openChoice(overlay, {
+    title: t("ruleTitle"),
+    body: t("ruleBody", { pack: reason.packName, tag: tagLabel(tag, lang) }),
+    checks: [],
+    confirm: t("ruleMark"),
+    cancel: t("cancel"),
+  }));
+  if (choice?.confirm) await markTag(meta, tag, "rule");
+}
+
+async function askAi(meta) {
+  if (aiInflight >= 2) return;
+  aiInflight += 1;
+  aiAsked.add(meta.tweetId);
+  try {
+    const result = await send({
+      type: "SUGGEST",
+      handle: meta.handle,
+      text: meta.text,
+      bio: meta.bio,
+    });
+    aiResults.set(meta.tweetId, result);
+    scan();
+    if (!result?.ok) toast(overlay, t(result?.error || "ai-network", { status: result?.status || "" }));
+  } finally {
+    aiInflight -= 1;
+  }
+}
+
+async function confirmAi(article) {
+  const meta = describe(article);
+  const result = meta && aiResults.get(meta.tweetId);
+  if (!result?.label) {
+    if (result?.verdict === "none") toast(overlay, t("aiNone"));
+    return;
+  }
+  const choice = await withOverlay(() => openChoice(overlay, {
+    title: t("aiChip", { tag: tagLabel(result.label, lang) }),
+    body: result.reason || t("subtitle"),
+    checks: [],
+    confirm: t("ruleMark"),
+    cancel: t("cancel"),
+  }));
+  if (choice?.confirm) await markTag(meta, result.label, "ai");
+}
+
+function render(article, meta) {
+  let host = article.querySelector(":scope > [data-xsl-host]");
+  if (!host) {
+    host = document.createElement("div");
+    host.dataset.xslHost = "1";
+    const anchor = [...article.querySelectorAll('[role="group"]')].find((node) => !node.closest('[data-testid="quoteTweet"]'));
+    if (anchor?.parentElement === article) article.insertBefore(host, anchor);
+    else article.append(host);
+  }
+  const record = indexOf(meta.userId);
+  const counts = record?.counts || {};
+  const badges = Object.entries(counts).slice(0, 4).map(([name, count]) => ({
+    tone: toneOf(name),
+    text: `${tagLabel(name, lang)} ${count}`,
+    title: `@${meta.handle}`,
+  }));
+  const matched = suspectFor(meta);
+  const ai = aiResults.get(meta.tweetId);
+  const settings = snapshot?.settings;
+  const shortcuts = settings?.shortcuts || {};
+  if (matched && settings?.ai?.enabled && settings.ai.autoSuggestSuspects && settings.ai.hasApiKey && !aiAsked.has(meta.tweetId)) {
+    askAi(meta);
+  }
+  mountBar(host, {
+    signature: {
+      badges,
+      suspect: matched?.reasons?.map((reason) => reason.packId).join(",") || "",
+      ai: ai ? `${ai.label || ai.verdict}:${ai.reason || ""}` : "",
+      followed: meta.followed === true,
+      whitelist: !!record?.whitelist,
+      ask: !!settings?.ai?.enabled,
+      lang,
+    },
+    markLabel: t("mark"),
+    shortcutTitle: `${shortcuts.spam || "Alt+S"} · ${shortcuts.marketing || "Alt+M"} · ${shortcuts.picker || "Alt+T"}`,
+    badges,
+    followed: meta.followed === true ? t("followed") : "",
+    whitelist: record?.whitelist ? t("whitelist") : "",
+    suspect: matched ? {
+      label: matched.reasons.length > 1 ? t("suspectCount", { count: matched.reasons.length }) : t("suspect"),
+      title: matched.reasons.map((reason) => reason.packName).join(" · "),
+    } : null,
+    ai: ai?.ok ? {
+      label: ai.label ? t("aiChip", { tag: tagLabel(ai.label, lang) }) : t("aiNone"),
+      title: ai.reason || "",
+    } : null,
+    askAi: settings?.ai?.enabled && !ai?.ok ? t("aiSuggest") : "",
+  }, {
+    onPicker: () => openTags(article),
+    onSuspect: () => confirmRule(article),
+    onAi: () => confirmAi(article),
+    onAsk: () => askAi(meta),
+  });
+  article.dataset.xslHandle = meta.handle.toLowerCase();
+  article.dataset.xslUser = meta.userId;
+  syncHidden(article, meta);
+  rememberFollow(meta);
+}
+
+function scan() {
+  if (!document.body) return;
+  const articles = document.querySelectorAll('article[data-testid="tweet"], article[role="article"]');
+  for (const article of articles) {
+    const meta = describe(article);
+    if (!meta) continue;
+    render(article, meta);
+  }
+}
+
+function schedule() {
+  clearTimeout(scanTimer);
+  scanTimer = setTimeout(scan, 120);
+}
+
+function ourMutation(record) {
+  const node = record.target?.nodeType === 1 ? record.target : record.target?.parentElement;
+  return !!node?.closest?.("[data-xsl-host], [data-xsl-overlay], [data-xsl-placeholder]");
+}
+
+function activeArticle() {
+  const focused = document.activeElement?.closest?.('article[data-testid="tweet"], article[role="article"]');
+  if (focused) return focused;
+  if (hovered && document.contains(hovered)) return hovered;
+  const mid = window.innerHeight / 2;
+  let best = null;
+  let distance = Infinity;
+  for (const article of document.querySelectorAll('article[data-testid="tweet"]')) {
+    const rect = article.getBoundingClientRect();
+    if (rect.bottom < 0 || rect.top > window.innerHeight) continue;
+    const delta = Math.abs(rect.top + rect.height / 2 - mid);
+    if (delta < distance) {
+      distance = delta;
+      best = article;
+    }
+  }
+  return best;
+}
+
+function typing(event) {
+  if (overlayBusy) return true;
+  const path = typeof event.composedPath === "function" ? event.composedPath() : [event.target];
+  return path.some((node) => isTypingTarget(node));
+}
+
+async function onKey(event) {
+  const shortcuts = snapshot?.settings?.shortcuts;
+  if (!shortcuts || typing(event)) return;
+  const article = activeArticle();
+  if (!article) return;
+  const meta = () => describe(article);
+  if (eventMatchesShortcut(event, shortcuts.spam)) {
+    stop(event);
+    const parsed = meta();
+    if (parsed) await markTag(parsed, "Spam", "shortcut");
+  } else if (eventMatchesShortcut(event, shortcuts.marketing)) {
+    stop(event);
+    const parsed = meta();
+    if (parsed) await markTag(parsed, "Marketing", "shortcut");
+  } else if (eventMatchesShortcut(event, shortcuts.picker)) {
+    stop(event);
+    await openTags(article);
+  }
+}
+
+function findArticle(handle) {
+  const want = String(handle || "").toLowerCase();
+  const matches = [...document.querySelectorAll("article[data-xsl-handle]")].filter((article) => article.dataset.xslHandle === want);
+  const visible = matches.find((article) => article.dataset.xslCollapsed !== "1" && article.querySelector('[data-testid="caret"]'));
+  const any = visible || matches.find((article) => article.querySelector('[data-testid="caret"]'));
+  if (any && any.dataset.xslCollapsed === "1") {
+    delete any.dataset.xslCollapsed;
+    any.querySelector(":scope > [data-xsl-placeholder]")?.remove();
+  }
+  return any || null;
+}
+
+async function pump() {
+  if (pumping || overlayBusy || document.visibilityState === "hidden" || !snapshot?.settings?.enablePlatformActions) return;
+  pumping = true;
+  try {
+    const peek = await send({ type: "PEEK_ACTION" });
+    if (!peek?.item) return;
+    const article = findArticle(peek.item.handle);
+    if (!article) return;
+    const begun = await send({ type: "BEGIN_ACTION", id: peek.item.id });
+    if (!begun?.ok) {
+      if (begun?.error === "daily-cap" && capNotified !== snapshot?.rateDay) {
+        capNotified = new Date().toDateString();
+        toast(overlay, t("daily-cap"));
+      }
+      return;
+    }
+    try {
+      await performPlatformAction(article, begun.item);
+      await send({ type: "FINISH_ACTION", id: begun.item.id, ok: true });
+      toast(overlay, t("actionOk", { action: t(begun.item.type), handle: begun.item.handle }));
+    } catch (error) {
+      await send({ type: "FINISH_ACTION", id: begun.item.id, ok: false, error: error?.message || "no-item" });
+      toast(overlay, t("actionFail", { error: t(error?.message || "no-item") }));
+    }
+  } finally {
+    pumping = false;
+  }
+}
+
+export async function start() {
+  dict = await loadDict();
+  overlay = createOverlay();
+  await loadSnapshot();
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes.xsl) applySnapshot(changes.xsl.newValue);
+  });
+  const observer = new MutationObserver((records) => {
+    if (records.some((record) => !ourMutation(record))) schedule();
+  });
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+  document.addEventListener("mouseover", (event) => {
+    const article = event.target?.closest?.('article[data-testid="tweet"], article[role="article"]');
+    if (article) hovered = article;
+  }, true);
+  document.addEventListener("focusin", (event) => {
+    const article = event.target?.closest?.('article[data-testid="tweet"], article[role="article"]');
+    if (article) hovered = article;
+  }, true);
+  document.addEventListener("keydown", onKey, true);
+  window.addEventListener("popstate", schedule);
+  setInterval(() => {
+    scan();
+    pump();
+  }, 2500);
+  scan();
+}

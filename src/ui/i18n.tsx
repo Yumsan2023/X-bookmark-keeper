@@ -2,7 +2,10 @@ import { createContext, useContext, type ReactNode } from 'react'
 import type { Lang } from '@/shared/types'
 
 const dict = {
-  app_title: { zh: 'Bookmark Keeper · X 书签管家', en: 'Bookmark Keeper · X bookmarks' },
+  app_title: { zh: 'X Toolkit', en: 'X Toolkit' },
+  app_subtitle: { zh: '书签管家 · 含打击账本', en: 'Bookmarks · Strike Ledger' },
+  tab_strike: { zh: '打击账本', en: 'Strike Ledger' },
+  strike_popup_help: { zh: '在 x.com 时间线上标记垃圾/营销（本地账本）。请卸载单独的 Strike Ledger，避免重复注入。静音/屏蔽默认关闭。', en: 'Mark spam/marketing on the x.com timeline (local ledger). Unload standalone Strike Ledger to avoid a double inject. Mute/block stay off until you enable them.' },
   tab_search: { zh: '书签', en: 'Bookmarks' },
   tab_library: { zh: '列表', en: 'Library' },
   tab_folders: { zh: '文件夹', en: 'Folders' },
@@ -250,6 +253,38 @@ const dict = {
   lib_filename_hint: { zh: '扩展名 {ext} 会自动添加。', en: 'The {ext} extension is added automatically.' },
   lib_start_export: { zh: '开始导出', en: 'Start Export' },
   lib_export_none_selected: { zh: '尚未勾选任何帖子', en: 'No posts selected' },
+  account: { zh: '账号', en: 'Account' },
+  account_filter: { zh: '收藏账号', en: 'Bookmarked by' },
+  account_unknown: { zh: '未知账号 (v0.5.0 前同步)', en: 'Unknown (synced before v0.5.0)' },
+  account_badge_title: { zh: '收藏该书签的 X 账号', en: 'X account(s) that bookmarked this' },
+  del_current_account: { zh: '当前登录账号: @{acct}', en: 'Currently logged in as @{acct}' },
+  del_no_account: { zh: '无法确认当前登录的 X 账号, 已取消删除: ', en: 'Could not determine the logged-in X account; deletion cancelled: ' },
+  del_queued: { zh: '后台删除 {n} 条 (账号 @{acct})…', en: 'Removing {n} on X as @{acct}…' },
+  del_skipped: { zh: '已跳过 {n} 条: 不属于当前登录账号 @{acct}, 请切换到对应账号再删', en: 'Skipped {n}: not bookmarked by the current account @{acct}. Switch to the owning account to delete them.' },
+  del_unknown_warn: { zh: '⚠ {n} 条未记录所属账号 (v0.5.0 之前同步), 将用 @{acct} 尝试删除; 如果它们是其他账号收藏的, X 端不会有变化, 但本地会被标记为已取消。建议先用各账号全量同步一次。', en: '⚠ {n} posts have no recorded account (synced before v0.5.0) and will be removed using @{acct}; if another account bookmarked them nothing changes on X but they are marked unbookmarked locally. Consider a full sync per account first.' },
+  del_will_skip: { zh: '其中 {n} 条不属于 @{acct}, 将跳过 (X 端和本地都不改动)。', en: '{n} of them are not bookmarked by @{acct} and will be skipped (no change on X or locally).' },
+  drop_to_move: { zh: '拖放到此文件夹', en: 'Drop here to move' },
+  dupes_hint: { zh: '只显示引用/链接同一原文的 ≥2 条帖子。不会自动删除: 检查后可勾选多余项, 用"删除书签"按账号安全删除。保留规则: 原文本身, 否则最近收藏的一条。', en: 'Only groups with ≥2 posts quoting/linking the same original. Nothing is auto-deleted: review, select extras, then use "Delete bookmark" (account-safe). Keeps the original itself, otherwise the most recently bookmarked.' },
+  dupes_none: { zh: '没有发现重复 (引用同一原文的) 书签', en: 'No duplicate (same-original) bookmarks found' },
+  dupes_select_extras: { zh: '选中多余项 (每组保留 1 条)', en: 'Select extras (keep 1 per group)' },
+  empty_hint_1: { zh: '在已登录的浏览器打开 x.com/i/bookmarks 并刷新', en: 'Open x.com/i/bookmarks while logged in and reload' },
+  empty_hint_2: { zh: '回到本扩展「同步」页，点击增量或全量同步', en: 'Open Sync here and start an incremental or full sync' },
+  empty_hint_3: { zh: '同步完成后即可在书签库浏览、搜索与归类', en: 'After sync, browse, search, and organize in the library' },
+  gallery_empty: { zh: '当前页没有媒体', en: 'No media on this page' },
+  go_sync: { zh: '去同步', en: 'Go sync' },
+  group_collapse: { zh: '收起', en: 'Collapse' },
+  group_expand: { zh: '展开', en: 'Expand' },
+  group_original_missing: { zh: '(原文未收藏, 内容来自引用)', en: '(original not saved; shown from quote)' },
+  group_original_saved: { zh: '原文也在库中', en: 'original saved' },
+  group_quotes: { zh: '{n} 条引用', en: '{n} quoting posts' },
+  groups: { zh: '组', en: 'groups' },
+  quoted_article: { zh: '长文', en: 'Article' },
+  view_dupes: { zh: '重复项', en: 'Duplicates' },
+  view_gallery: { zh: '媒体画廊', en: 'Media gallery' },
+  view_group: { zh: '按引用原文归组', en: 'Group by quoted original' },
+  view_list: { zh: '列表', en: 'List' },
+  clear_all_filters: { zh: '清除全部', en: 'Clear all' },
+  clear_filter: { zh: '清除筛选', en: 'Clear filter' },
 } as const
 
 export type Key = keyof typeof dict
@@ -262,7 +297,13 @@ export function I18nProvider({ lang, children }: { lang: Lang; children: ReactNo
 
 export function useT() {
   const lang = useContext(Ctx)
-  return (k: Key) => dict[k]?.[lang] ?? k
+  return (k: Key, vars?: Record<string, string | number>) => {
+    let text: string = dict[k]?.[lang] ?? k
+    if (vars) {
+      for (const [name, value] of Object.entries(vars)) text = text.replaceAll(`{${name}}`, String(value ?? ''))
+    }
+    return text
+  }
 }
 
 export function useLang() {

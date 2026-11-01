@@ -1,5 +1,6 @@
 import { XClient } from '@/api/client'
 import { OPERATIONS } from '@/api/endpoints'
+import { normalizeHandle } from '@/shared/accounts'
 import { getAuth, getProgress, getSettings, getTimelineProgress, saveProgress, saveTimelineProgress, bumpDbVersion, saveLastFullSync } from '@/shared/storage'
 import { STORAGE_KEYS, type BgRequest, type BgResponse } from '@/shared/types'
 import { cancelTask, deleteBookmarks, fetchThreads, pushFolder } from './actions'
@@ -22,6 +23,7 @@ export const engine = new SyncEngine({
     getFolders: (c) => client.getFolders(c),
     getFolderTimeline: (id, c) => client.getFolderTimeline(id, c),
     getTweetDetail: (id) => client.getTweetDetail(id),
+    getAccount: () => resolveCurrentAccount(),
   },
   getSettings,
   loadProgress: getProgress,
@@ -30,6 +32,19 @@ export const engine = new SyncEngine({
   onFullSyncDone: (meta) => saveLastFullSync(meta),
   scheduleWake: (at) => chrome.alarms.create('bk-resume', { when: at }),
 })
+
+/** Screen name of the logged-in X account, remembered under bk_accounts (not the strike ledger). */
+export async function resolveCurrentAccount(): Promise<{ screen_name: string; user_id?: string }> {
+  const { screen_name } = await client.getAccountSettings()
+  const name = normalizeHandle(screen_name)
+  if (!name) throw new Error('无法确认当前登录的 X 账号')
+  const auth = await getAuth()
+  const stored = ((await chrome.storage.local.get(STORAGE_KEYS.accounts))[STORAGE_KEYS.accounts] ?? {}) as Record<string, { user_id?: string; last_seen_at?: number }>
+  const prev = stored[name] ?? {}
+  stored[name] = { user_id: auth?.user_id ?? prev.user_id, last_seen_at: Date.now() }
+  await chrome.storage.local.set({ [STORAGE_KEYS.accounts]: stored })
+  return { screen_name: name, user_id: stored[name].user_id }
+}
 
 export const timelineEngine = new TimelineSyncEngine({
   api: {
@@ -147,8 +162,9 @@ export async function handleMessage(msg: BgRequest): Promise<BgResponse> {
         return { ok: true, data: { changed, ids: await getAllQueryIds(), ops: OPERATIONS } }
       }
       case 'bookmarks/delete':
-        void deleteBookmarks(client, msg.tweetIds, msg.removeLocal)
-        return { ok: true }
+        return { ok: true, data: await deleteBookmarks(client, msg.tweetIds, msg.removeLocal) }
+      case 'account/current':
+        return { ok: true, data: await resolveCurrentAccount() }
       case 'folder/push':
         void pushFolder(client, msg.tweetIds, msg.folder)
         return { ok: true }

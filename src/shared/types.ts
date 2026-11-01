@@ -20,6 +20,10 @@ export interface QuotedPost {
   screen_name: string
   name: string
   text: string
+  article_id?: string
+  article_title?: string
+  article_preview?: string
+  media?: MediaItem[]
 }
 
 export interface ThreadItem {
@@ -84,6 +88,11 @@ export interface Post {
    * timeline 帖会放入文件夹 timeline:@handle, 与书签分区。
    */
   source?: PostSource
+  /**
+   * X accounts (screen names, lowercase) that bookmarked this post.
+   * Empty/missing means unknown (synced before v0.5). Not used for strike ledger.
+   */
+  accounts?: string[]
 }
 
 export interface Folder {
@@ -126,6 +135,9 @@ export interface SyncProgress {
   user_id?: string
   /** 同步种类: 缺省/旧数据视为 bookmark */
   kind?: 'bookmark' | 'timeline'
+  /** Bookmark sync: screen name that owns this run (lowercase, no @) */
+  account?: string
+  account_id?: string
 }
 
 export interface AuthInfo {
@@ -134,6 +146,8 @@ export interface AuthInfo {
   uuid: string
   transaction_id: string
   captured_at: number
+  /** From the twid cookie when the page request included it */
+  user_id?: string
 }
 
 // ---------------- 设置 ----------------
@@ -211,6 +225,7 @@ export type BgRequest =
   | { type: 'queryids/refresh' }
   | { type: 'queryids/get' }
   | { type: 'ui/openLibrary' }
+  | { type: 'account/current' }
 
 export interface BgResponse<T = unknown> {
   ok: boolean
@@ -232,6 +247,8 @@ export const STORAGE_KEYS = {
   lastFullSync: 'bk_last_full_sync',
   /** Library table visible columns (LibraryColumnId[]) */
   libraryColumns: 'bk_library_columns',
+  /** screen_name → { user_id?, last_seen_at } for bookmark accounts. Not strike data. */
+  accounts: 'bk_accounts',
 } as const
 
 /** 时间线帖子的本地文件夹前缀, 形如 timeline:@alice */
@@ -255,6 +272,9 @@ export interface TaskProgress {
   failed: number
   error?: string
   updated_at: number
+  /** Bookmark deletes skipped because another account owns them */
+  skipped?: number
+  account?: string
 }
 
 /** Persisted after a successful full bookmark sync (for the sync report UI) */

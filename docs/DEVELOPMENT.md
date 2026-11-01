@@ -5,7 +5,7 @@
 ## 环境要求
 
 - Node.js（建议当前 LTS）与 npm  
-- Chrome ≥ 114（扩展 `minimum_chrome_version`）  
+- Chrome ≥ 120（扩展 `minimum_chrome_version`；打击账本内容脚本与选项页）  
 - 可选 e2e：本机 Chrome 可执行文件（`CHROME_BIN`）、`openssl`、puppeteer-core（已在 devDependencies）
 
 ## 常用命令
@@ -25,7 +25,7 @@ npm run e2e          # 需先 build；真实 Chrome + 本地 Mock X（自签名 
 ## 目录一览
 
 ```
-bookmark-keeper/
+x-toolkit/   # 仓库路径不变；包名 x-toolkit
 ├── public/                 # 静态资源，构建时拷入 dist
 │   ├── manifest.json       # MV3 清单（手写，不依赖 crxjs）
 │   └── icons/
@@ -51,14 +51,16 @@ bookmark-keeper/
 │   ├── search/             # MiniSearch、query-parser、tokenizer、highlight、service
 │   ├── export/             # json/csv/markdown/obsidian zip/batch/media
 │   ├── ai/                 # OpenAI 兼容归类
-│   ├── shared/             # types、storage
+│   ├── shared/             # types、storage、accounts（书签多账号，与 xsl 分开）
+│   ├── strike/             # 打击账本：pure/store、内容脚本、选项 UI（打进同一个 Vite 构建）
+│   ├── library/            # 按引用原文归组（纯函数）
 │   └── ui/                 # React：options / sidepanel / popup / print
 │       └── components/library/  # v0.4 列表页 LibraryView + Filter/Export 面板
 ├── tests/                  # vitest + fixtures/builders（手工 GraphQL 形状）
 ├── e2e/                    # Mock X + puppeteer 冒烟
 ├── scripts/gen-icons.mjs
 ├── docs/                   # USAGE / DEVELOPMENT
-├── vite.config.ts          # 多入口：background.js + 四个 HTML
+├── vite.config.ts          # 多入口：background.js + 四个 HTML，并再打出 strike.js IIFE
 ├── vitest.config.ts
 └── package.json
 ```

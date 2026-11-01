@@ -16,6 +16,8 @@ export interface SyncApi {
   getFolders(cursor?: string): Promise<any>
   getFolderTimeline(folderId: string, cursor?: string): Promise<any>
   getTweetDetail(tweetId: string): Promise<any>
+  /** Current logged-in bookmark account. Optional so tests can omit it. */
+  getAccount?(): Promise<{ screen_name: string; user_id?: string } | undefined>
 }
 
 export interface SyncDeps {
@@ -157,15 +159,37 @@ export class SyncEngine {
     const settings = await this.deps.getSettings()
     const saved = await this.deps.loadProgress()
     const now = this.now()
-    const canResume = mode === 'resume' && saved && saved.mode === 'full' && saved.status !== 'done' && saved.status !== 'idle'
+    let current: { screen_name: string; user_id?: string } | undefined
+    try {
+      const got = await this.deps.api.getAccount?.()
+      if (got?.screen_name) current = { ...got, screen_name: got.screen_name.replace(/^@/, '').toLowerCase() }
+    } catch {
+      current = undefined
+    }
+    let canResume = !!(mode === 'resume' && saved && saved.mode === 'full' && saved.status !== 'done' && saved.status !== 'idle')
+    const switched = !!(canResume && saved?.account && current && saved.account !== current.screen_name)
+    if (switched) canResume = false
     if (canResume && saved) {
-      this.prog = { ...saved, status: 'running', error: undefined, error_code: undefined, wait_until: undefined, message: '从断点继续', updated_at: now }
+      this.prog = {
+        ...saved,
+        status: 'running',
+        error: undefined,
+        error_code: undefined,
+        wait_until: undefined,
+        message: '从断点继续',
+        updated_at: now,
+        account: saved.account ?? current?.screen_name,
+        account_id: saved.account_id ?? current?.user_id,
+      }
     } else {
       this.prog = {
         status: 'running',
         phase: 'bookmarks',
-        mode: mode === 'resume' ? 'incremental' : mode,
+        mode: switched ? 'full' : mode === 'resume' ? 'incremental' : mode,
         kind: 'bookmark',
+        account: current?.screen_name,
+        account_id: current?.user_id,
+        message: switched ? `检测到已切换账号 @${current?.screen_name}, 重新全量同步` : undefined,
         run_id: (this.deps.newRunId ?? (() => `${now.toString(36)}${Math.random().toString(36).slice(2, 8)}`))(),
         started_at: now,
         updated_at: now,
@@ -226,7 +250,7 @@ export class SyncEngine {
       if (!page.recognized) throw new XApiError('data', '无法识别 Bookmarks 响应结构 (X 可能改版), 请查看 README 的 queryId/结构变动说明')
       const tweets = page.entries.filter((e): e is { kind: 'tweet'; post: ParsedPost } => e.kind === 'tweet').map((e) => e.post)
       const deleted = page.entries.filter((e) => e.kind === 'deleted').map((e) => (e as { tweet_id: string }).tweet_id)
-      const r = await upsertParsed(tweets, runId, { source: 'bookmark' })
+      const r = await upsertParsed(tweets, runId, { source: 'bookmark', account: this.prog.account })
       if (deleted.length) await markTweetsDeleted(deleted, runId)
       this.seenInBookmarks += tweets.length + deleted.length
       const nextCursor = page.cursor && page.cursor !== cursor ? page.cursor : undefined
@@ -275,7 +299,7 @@ export class SyncEngine {
         const page = parseTimelinePage(res)
         if (!page.recognized) break
         const tweets = page.entries.filter((e): e is { kind: 'tweet'; post: ParsedPost } => e.kind === 'tweet').map((e) => e.post)
-        const r = await upsertParsed(tweets, runId, { folder: f.name, keepSortIndex: true, source: 'bookmark' })
+        const r = await upsertParsed(tweets, runId, { folder: f.name, keepSortIndex: true, source: 'bookmark', account: this.prog.account })
         tweets.forEach((t) => seen.add(t.tweet_id))
         await this.save({ pages: this.prog.pages + 1, added: this.prog.added + r.added })
         const next = page.cursor && page.cursor !== cursor ? page.cursor : undefined
@@ -284,10 +308,11 @@ export class SyncEngine {
         await this.pageDelay(settings)
       }
       // 本地认为在该文件夹、但 X 端文件夹里已没有的书签 → 移出
+      const account = this.prog.account
       await db.posts
         .where('folder')
         .equals(f.name)
-        .filter((p) => !seen.has(p.tweet_id))
+        .filter((p) => !seen.has(p.tweet_id) && (!account || !p.accounts?.length || p.accounts.includes(account)))
         .modify({ folder: '' })
       await this.deps.onDbChanged?.()
     }
@@ -319,8 +344,9 @@ export class SyncEngine {
   // ---------------- 阶段 4: 检测被移除的书签 ----------------
   private async detectRemoved() {
     await this.save({ phase: 'detect', message: '检测已取消的书签…' })
-    const n = await markUnbookmarkedNotSeen(this.prog.run_id, this.seenInBookmarks)
+    const n = await markUnbookmarkedNotSeen(this.prog.run_id, this.seenInBookmarks, this.prog.account)
     if (n === -1) await this.save({ message: '已抓取数量异常偏少, 跳过"已取消书签"检测' })
+    else if (n === -2) await this.save({ message: '无法确认当前登录账号, 跳过"已取消书签"检测' })
     else await this.save({ message: n ? `标记 ${n} 条已取消书签 (本地保留)` : undefined })
   }
 }

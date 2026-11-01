@@ -38,6 +38,22 @@ export class BookmarkDB extends Dexie {
       folders: 'name, x_id, source',
       searchMeta: 'key',
     })
+    // v4: multiEntry accounts (which X account bookmarked the post). Old rows get accounts: [].
+    this.version(4)
+      .stores({
+        posts:
+          'tweet_id, sort_index, screen_name, created_at, folder, status, sync_run, source, has_image, has_video, has_link, has_quote, *tags, *accounts',
+        folders: 'name, x_id, source',
+        searchMeta: 'key',
+      })
+      .upgrade((tx) =>
+        tx
+          .table('posts')
+          .toCollection()
+          .modify((post) => {
+            if (!Array.isArray(post.accounts)) post.accounts = []
+          }),
+      )
   }
 }
 

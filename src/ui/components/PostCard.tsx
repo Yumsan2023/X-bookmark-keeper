@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { Post } from '@/shared/types'
 import { highlight } from '@/search/highlight'
+import { AccountBadges } from './AccountBadges'
 import { useLang, useT } from '../i18n'
 import { fmtDate, fmtNum } from '../util'
 
@@ -40,11 +41,17 @@ export function PostCard({ post: p, terms, selected, onSelect, onTag, onNote, on
           {p.status === 'tweet_deleted' && <span className="badge bad">{t('deleted_badge')}</span>}
           {p.status === 'unbookmarked' && <span className="badge warn">{t('unbookmarked_badge')}</span>}
           {p.folder && <span className="badge">📁 {p.folder}</span>}
+          <AccountBadges accounts={p.accounts} />
         </header>
         <p className="text"><Hl text={p.text} terms={terms} /></p>
         {p.quoted && (
           <blockquote className="quote">
-            <b>{p.quoted.name}</b> <span className="muted">@{p.quoted.screen_name}</span>
+            <b><Hl text={p.quoted.name} terms={terms} /></b> <span className="muted">@{p.quoted.screen_name}</span>
+            {p.quoted.article_title && !p.quoted.text.includes(p.quoted.article_title) && (
+              <div>
+                <span className="badge">📰 {t('quoted_article')}</span> <b><Hl text={p.quoted.article_title} terms={terms} /></b>
+              </div>
+            )}
             <div><Hl text={p.quoted.text} terms={terms} /></div>
           </blockquote>
         )}

@@ -1,7 +1,8 @@
 import { XApiError } from '@/api/errors'
 import { parseThread } from '@/api/parser'
 import { db } from '@/db/db'
-import { markUnbookmarked, removeLocal } from '@/db/posts'
+import { releaseBookmark } from '@/db/posts'
+import { normalizeHandle, partitionDeletes } from '@/shared/accounts'
 import { STORAGE_KEYS, type TaskProgress } from '@/shared/types'
 import { bumpDbVersion, getSettings } from '@/shared/storage'
 import type { XClient } from '@/api/client'
@@ -23,12 +24,13 @@ async function runTask(
   kind: TaskProgress['kind'],
   ids: string[],
   step: (id: string) => Promise<void>,
+  extra: Partial<Pick<TaskProgress, 'skipped' | 'account'>> = {},
 ): Promise<TaskProgress> {
   if (current) throw new Error('已有任务在运行')
   const settings = await getSettings()
   const ctl = { id: `${Date.now()}`, cancel: false }
   current = ctl
-  const t: TaskProgress = { id: ctl.id, kind, status: 'running', total: ids.length, done: 0, failed: 0, updated_at: Date.now() }
+  const t: TaskProgress = { id: ctl.id, kind, status: 'running', total: ids.length, done: 0, failed: 0, updated_at: Date.now(), ...extra }
   await publish(t)
   try {
     for (const id of ids) {
@@ -65,13 +67,42 @@ async function runTask(
   return t
 }
 
-/** 批量取消 X 端书签。removeLocal=true 则本地也物理删除, 否则仅标记 unbookmarked (保留) */
-export function deleteBookmarks(client: XClient, ids: string[], removeLocalToo: boolean) {
-  return runTask('delete', [...ids], async (id) => {
-    await client.deleteBookmark(id)
-    if (removeLocalToo) await removeLocal([id])
-    else await markUnbookmarked([id])
-  })
+export interface DeleteBookmarkResult {
+  account: string
+  queued: number
+  skipped: number
+  unknown: number
+}
+
+/**
+ * 批量取消当前登录账号的 X 书签。
+ * 其他账号收藏的帖子跳过；未记录账号的旧数据会尝试删除（unknown）。
+ * 仍有其他账号持有时只去掉当前账号，不把整行标成 unbookmarked。
+ */
+export async function deleteBookmarks(client: XClient, ids: string[], removeLocalToo: boolean): Promise<DeleteBookmarkResult> {
+  if (current) throw new Error('已有任务在运行')
+  let account = ''
+  try {
+    account = normalizeHandle((await client.getAccountSettings()).screen_name)
+  } catch (e) {
+    throw new Error(`无法确认当前登录的 X 账号, 已取消删除: ${(e as Error).message}`)
+  }
+  if (!account) throw new Error('无法确认当前登录的 X 账号, 已取消删除')
+  const unique = [...new Set(ids)]
+  const posts = await db.posts.bulkGet(unique)
+  const part = partitionDeletes(unique, posts, account)
+  if (part.allowed.length) {
+    void runTask(
+      'delete',
+      [...part.allowed],
+      async (id) => {
+        await client.deleteBookmark(id)
+        await releaseBookmark(id, account, removeLocalToo)
+      },
+      { skipped: part.skipped.length, account },
+    ).catch(() => {})
+  }
+  return { account, queued: part.allowed.length, skipped: part.skipped.length, unknown: part.unknown.length }
 }
 
 /** 把本地已归类的书签推送到 X 文件夹 (best-effort) */

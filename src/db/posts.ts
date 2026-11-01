@@ -1,6 +1,7 @@
 import type { Folder, Post, PostSource } from '@/shared/types'
 import { postSource } from '@/shared/types'
 import type { ParsedPost } from '@/api/parser'
+import { addAccount, decideDelete, normalizeHandle, postAccounts } from '@/shared/accounts'
 import { db } from './db'
 
 /** 把解析结果合并进本地记录: 保留本地字段 (标签/文件夹/备注/线程/saved_at/source) */
@@ -8,10 +9,11 @@ export function mergePost(
   existing: Post | undefined,
   p: ParsedPost,
   runId: string,
-  opts: { folder?: string; keepSortIndex?: boolean; source?: PostSource } = {},
+  opts: { folder?: string; keepSortIndex?: boolean; source?: PostSource; account?: string } = {},
 ): Post {
   const now = Date.now()
   const incomingSource: PostSource = opts.source ?? 'bookmark'
+  const account = incomingSource === 'bookmark' ? normalizeHandle(opts.account) : ''
   if (!existing) {
     return {
       ...p,
@@ -21,6 +23,7 @@ export function mergePost(
       saved_at: now,
       sync_run: runId,
       source: incomingSource,
+      accounts: account ? [account] : [],
     }
   }
   // 已是书签的帖: 不被 timeline 降级; 文件夹不被 timeline 覆盖
@@ -52,6 +55,7 @@ export function mergePost(
     deleted_at: undefined,
     sync_run: runId,
     source: nextSource,
+    accounts: account ? addAccount(existing.accounts, account) : postAccounts(existing),
   }
 }
 
@@ -65,7 +69,7 @@ export interface UpsertResult {
 export async function upsertParsed(
   parsed: ParsedPost[],
   runId: string,
-  opts: { folder?: string; keepSortIndex?: boolean; source?: PostSource } = {},
+  opts: { folder?: string; keepSortIndex?: boolean; source?: PostSource; account?: string } = {},
 ): Promise<UpsertResult> {
   if (!parsed.length) return { added: 0, updated: 0, existingIds: [] }
   const ids = parsed.map((p) => p.tweet_id)
@@ -108,26 +112,69 @@ export async function markTweetsDeleted(ids: string[], runId: string): Promise<n
  * 全量同步结束后: 本次 run 没看到的 active 书签 = X 端已取消书签, 本地标记 unbookmarked (不删除)。
  * safetyMin: 本次 run 看到的书签数低于该值而本地很多时视为异常, 不执行 (防止接口返回空页造成误标)。
  */
-export async function markUnbookmarkedNotSeen(runId: string, seenCount: number): Promise<number> {
-  // 只统计书签来源, 避免 timeline 帖被误标
-  const bookmarkActive = await db.posts
-    .where('status')
-    .equals('active')
-    .filter((p) => postSource(p) === 'bookmark')
-    .count()
-  if (bookmarkActive > 20 && seenCount < bookmarkActive * 0.3) return -1 // 异常保护
+export async function markUnbookmarkedNotSeen(runId: string, seenCount: number, account?: string): Promise<number> {
+  const isBookmark = (p: Post) => postSource(p) === 'bookmark'
+  const owner = normalizeHandle(account)
+  // No confirmed account, but the library already has account stamps: do not mass-unbookmark other accounts.
+  if (!owner) {
+    const stamped = await db.posts.orderBy('accounts').limit(1).count()
+    if (stamped > 0) return -2
+    const bookmarkActive = await db.posts.where('status').equals('active').filter(isBookmark).count()
+    if (bookmarkActive > 20 && seenCount < bookmarkActive * 0.3) return -1
+    const now = Date.now()
+    let n = 0
+    await db.posts
+      .where('status')
+      .equals('active')
+      .filter((p) => isBookmark(p) && p.sync_run !== runId)
+      .modify((p) => {
+        p.status = 'unbookmarked'
+        p.deleted_at = now
+        n++
+      })
+    return n
+  }
+  const owns = (p: Post) => p.status === 'active' && isBookmark(p) && postAccounts(p).includes(owner)
+  const ownedActive = await db.posts.where('accounts').equals(owner).filter(owns).count()
+  if (ownedActive > 20 && seenCount < ownedActive * 0.3) return -1
   const now = Date.now()
   let n = 0
   await db.posts
-    .where('status')
-    .equals('active')
-    .filter((p) => postSource(p) === 'bookmark' && p.sync_run !== runId)
+    .where('accounts')
+    .equals(owner)
+    .filter((p) => owns(p) && p.sync_run !== runId)
     .modify((p) => {
-      p.status = 'unbookmarked'
-      p.deleted_at = now
-      n++
+      const left = postAccounts(p).filter((a) => a !== owner)
+      p.accounts = left
+      if (!left.length) {
+        p.status = 'unbookmarked'
+        p.deleted_at = now
+        n++
+      }
     })
   return n
+}
+
+/** Drop one owning account after X accepted DeleteBookmark. */
+export async function releaseBookmark(tweetId: string, account: string, removeLocal: boolean): Promise<'missing' | 'keep' | 'remove' | 'unbookmark'> {
+  const post = await db.posts.get(tweetId)
+  if (!post) return 'missing'
+  const decision = decideDelete(post, account, removeLocal)
+  if (decision.kind === 'remove') await db.posts.delete(tweetId)
+  else if (decision.kind === 'keep') await db.posts.update(tweetId, { accounts: decision.accounts })
+  else await db.posts.update(tweetId, { accounts: decision.accounts, status: 'unbookmarked', deleted_at: Date.now() })
+  return decision.kind
+}
+
+export async function listBookmarkAccounts(): Promise<{ account: string; count: number }[]> {
+  const keys = (await db.posts.orderBy('accounts').uniqueKeys()) as string[]
+  const rows = await Promise.all(
+    keys.filter(Boolean).map(async (account) => ({
+      account,
+      count: await db.posts.where('accounts').equals(account).count(),
+    })),
+  )
+  return rows.sort((a, b) => b.count - a.count || a.account.localeCompare(b.account))
 }
 
 export async function getAllPosts(): Promise<Post[]> {
@@ -319,7 +366,7 @@ export function validateBackup(b: any): b is Backup {
 
 /** 导入备份: 同 tweet_id 以备份为准合并 (标签取并集) */
 export async function importBackup(b: Backup): Promise<{ posts: number; folders: number }> {
-  if (!validateBackup(b)) throw new Error('不是有效的 Bookmark Keeper 备份文件')
+  if (!validateBackup(b)) throw new Error('不是有效的 X Toolkit 备份文件')
   const chunk = 500
   for (let i = 0; i < b.posts.length; i += chunk) {
     const part = b.posts.slice(i, i + chunk)
@@ -327,7 +374,8 @@ export async function importBackup(b: Backup): Promise<{ posts: number; folders:
     await db.posts.bulkPut(
       part.map((p, j) => {
         const ex = existing[j]
-        return ex ? { ...p, tags: [...new Set([...(ex.tags ?? []), ...(p.tags ?? [])])] } : p
+        const accounts = [...new Set([...postAccounts(ex), ...postAccounts(p)].map((a) => normalizeHandle(a)).filter(Boolean))]
+        return ex ? { ...p, tags: [...new Set([...(ex.tags ?? []), ...(p.tags ?? [])])], accounts } : { ...p, accounts }
       }),
     )
   }
