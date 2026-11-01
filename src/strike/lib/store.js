@@ -467,6 +467,24 @@ export function dispatch(message, sender = {}) {
         result = cancelAction(state, message.id);
         break;
       }
+      case "REPLACE_STATE": {
+        const denied = editorOnly(sender);
+        if (denied) return denied;
+        const incoming = message.state;
+        if (!incoming || typeof incoming !== "object" || Array.isArray(incoming)) {
+          return { ok: false, error: "bad-file" };
+        }
+        const keepKey = message.includeSecrets ? null : (state.settings.ai?.apiKey || "");
+        const next = normalizeState(incoming, now);
+        if (keepKey !== null) {
+          next.settings.ai.apiKey = keepKey;
+          next.settings.ai.hasApiKey = !!keepKey;
+        }
+        for (const key of Object.keys(state)) delete state[key];
+        Object.assign(state, next);
+        result = { ok: true, accounts: Object.keys(state.ledger).length, queue: state.queue.length };
+        break;
+      }
       case "EXPORT": {
         const denied = editorOnly(sender);
         if (denied) return denied;

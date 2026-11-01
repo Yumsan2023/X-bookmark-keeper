@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react'
+import { APP_VERSION } from '@/backup/full'
 import { STORAGE_KEYS, type LastFullSyncMeta } from '@/shared/types'
 import { useLibrary, useProgress, useSettings } from './hooks'
 import { I18nProvider, useT } from './i18n'
@@ -126,7 +127,7 @@ function Shell({ mode }: { mode: 'full' | 'side' }) {
             <span className="sidebar-logo">🔖</span>
             <div>
               <div className="sidebar-title">{t('app_title')}</div>
-              <div className="sidebar-ver muted">v0.7.6 · {t('app_subtitle')}</div>
+              <div className="sidebar-ver muted">v{APP_VERSION} · {t('app_subtitle')}</div>
             </div>
           </div>
           <nav className="sidebar-nav">
@@ -220,7 +221,16 @@ function Shell({ mode }: { mode: 'full' | 'side' }) {
         {tab === 'tags' && <TagsView lib={lib} onOpen={open} />}
         {tab === 'sync' && <SyncView onOpenReport={() => setReportOpen(true)} />}
         {tab === 'settings' && (
-          <SettingsView key={JSON.stringify(settings)} settings={settings} save={save} lib={lib} />
+          <SettingsView
+            key={JSON.stringify(settings)}
+            settings={settings}
+            save={save}
+            lib={lib}
+            onNotify={(message) => {
+              setToast(message)
+              window.setTimeout(() => setToast(''), 6000)
+            }}
+          />
         )}
         {tab === 'strike' && <StrikeLedgerView />}
       </main>

@@ -49,7 +49,8 @@ x-toolkit/   # 仓库路径不变；包名 x-toolkit
 │   │   └── errors.ts
 │   ├── db/                 # Dexie：posts / folders / searchMeta
 │   ├── search/             # MiniSearch、query-parser、tokenizer、highlight、service
-│   ├── export/             # json/csv/markdown/obsidian zip/batch/media
+│   ├── export/             # json/csv/markdown/obsidian zip/batch/media（帖子摘出，不是全量备份）
+│   ├── backup/             # 一键全量备份：format x-toolkit-full，整包替换
 │   ├── ai/                 # OpenAI 兼容归类
 │   ├── shared/             # types、storage、accounts（书签多账号，与 xsl 分开）
 │   ├── strike/             # 打击账本：pure/store、author-flags.js、内容脚本、选项 UI（打进同一个 Vite 构建）
@@ -92,6 +93,7 @@ x-toolkit/   # 仓库路径不变；包名 x-toolkit
 | 作者常营销 / 常垃圾 | `strike/lib/author-flags.js`、`strike/lib/pure.js` 的 `setAuthorFlag`、书签 `AuthorMarks.tsx` |
 | 社区名单（黄标 / 折叠，不记账） | `strike/lib/pure.js` 的 `parseCommunityList` / `matchCommunityLists` / `communityListDecision`，选项页社区名单一节，内容脚本黄标 |
 | 导出格式 | `export/*` |
+| 一键全量备份 / 恢复 | `backup/full.ts`（格式与摘要）、`backup/io.ts`（读写）、设置页 `FullBackupPanel`。恢复整包替换；`xsl` 经后台 `REPLACE_STATE`。密钥默认不进文件 |
 | UI 文案 | `ui/i18n.tsx` |
 | 权限 / 主机 | `public/manifest.json` |
 
