@@ -1,14 +1,41 @@
 const shadows = new WeakMap();
 
-function shadowFor(host) {
+function shadowFor(host, options = {}) {
+  if (!host || host.nodeType !== 1) return null;
   let shadow = shadows.get(host);
   if (shadow) return shadow;
-  shadow = host.attachShadow({ mode: "closed" });
+  try {
+    shadow = host.attachShadow({ mode: "closed" });
+  } catch {
+    return null;
+  }
   shadows.set(host, shadow);
+  const guardClick = options.guardClick === true;
   for (const type of ["click", "pointerdown", "mousedown", "mouseup", "keydown"]) {
-    host.addEventListener(type, (event) => event.stopPropagation());
+    host.addEventListener(type, (event) => {
+      event.stopPropagation();
+      if (guardClick && type === "click") event.preventDefault();
+    });
   }
   return shadow;
+}
+
+/** A redraw or extension reload can leave a host whose closed shadow we no longer own. */
+function replaceHost(host) {
+  const next = document.createElement(host.tagName.toLowerCase() || "div");
+  if (host.dataset.xslHost) next.dataset.xslHost = host.dataset.xslHost;
+  if (host.dataset.xslName) next.dataset.xslName = host.dataset.xslName;
+  if (host.dataset.xslOverlay) next.dataset.xslOverlay = host.dataset.xslOverlay;
+  if (host.dataset.xslKeep) next.dataset.xslKeep = host.dataset.xslKeep;
+  if (host.parentNode) host.replaceWith(next);
+  return next;
+}
+
+function ensureShadow(host, options) {
+  const shadow = shadowFor(host, options);
+  if (shadow || !host?.parentNode) return { host, shadow };
+  const next = replaceHost(host);
+  return { host: next, shadow: shadowFor(next, options) };
 }
 
 function el(tag, attrs = {}, kids = []) {
@@ -50,6 +77,14 @@ button:focus-visible { outline: 2px solid #e85d04; outline-offset: 1px; }
 .spam { color: #ffd5d8; background: rgba(244,33,46,.18); border: 1px solid rgba(244,33,46,.35); }
 .marketing { color: #d2e9ff; background: rgba(29,155,240,.16); border: 1px solid rgba(29,155,240,.35); }
 .custom { color: #efe7da; background: rgba(243,234,215,.08); border: 1px solid rgba(243,234,215,.2); }
+.protect {
+  color: #d8ffe8; background: rgba(0,186,124,.18); border: 1px solid rgba(0,186,124,.55);
+  font-weight: 700; cursor: default;
+}
+.tagchip { padding: 2px 7px; font-weight: 650; }
+.tagchip.more { color: #c4cdd6; background: transparent; }
+.bar.inline { gap: 4px; }
+.bar.inline .badge, .bar.inline .tagchip { padding: 1px 6px; font-size: 11px; }
 .suspect { color: #3a2d05; background: #f0c94d; border-color: #f0c94d; font-weight: 700; }
 .ai { color: #d7c4ff; border-color: rgba(168,130,255,.5); }
 .quiet { color: #8b98a5; border-color: transparent; padding-left: 2px; padding-right: 2px; cursor: default; }
@@ -77,6 +112,7 @@ const OVERLAY_CSS = `
 h2 { margin: 0 0 8px; font-size: 16px; font-weight: 680; }
 p { margin: 0 0 12px; color: #c4cdd6; font-size: 13px; line-height: 1.45; }
 .warn { color: #f0c94d; }
+.safe { color: #8ee0b0; }
 label { display: flex; gap: 8px; align-items: flex-start; margin: 8px 0; font-size: 13px; }
 label small { display: block; color: #8b98a5; font-size: 12px; }
 .row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; margin-top: 12px; }
@@ -111,13 +147,46 @@ export function createOverlay() {
     host.dataset.xslOverlay = "1";
     document.documentElement.append(host);
   }
-  const shadow = shadowFor(host);
+  let shadow = shadowFor(host);
+  if (!shadow) {
+    host.remove();
+    host = document.createElement("div");
+    host.dataset.xslOverlay = "1";
+    document.documentElement.append(host);
+    shadow = shadowFor(host);
+  }
+  if (!shadow) return null;
   if (!shadow.querySelector("style")) shadow.append(el("style", { text: OVERLAY_CSS }));
   return shadow;
 }
 
+function paintChips(bar, model, handlers) {
+  if (model.protect) {
+    bar.append(el("span", {
+      class: "badge protect",
+      text: model.protect.text,
+      title: model.protect.title || "",
+    }));
+  }
+  for (const chip of model.chips || []) {
+    bar.append(el("button", {
+      class: `chip tagchip ${chip.tone || "custom"}`,
+      type: "button",
+      text: chip.text,
+      title: chip.title || "",
+      onClick: (event) => {
+        event.preventDefault();
+        handlers.onChip?.(chip);
+      },
+    }));
+  }
+}
+
 export function mountBar(host, model, handlers) {
-  const shadow = shadowFor(host);
+  const ready = ensureShadow(host, { guardClick: true });
+  host = ready.host;
+  const shadow = ready.shadow;
+  if (!shadow) return;
   const signature = JSON.stringify(model.signature);
   if (host.dataset.xslSig === signature && shadow.childElementCount) return;
   host.dataset.xslSig = signature;
@@ -132,11 +201,7 @@ export function mountBar(host, model, handlers) {
       handlers.onPicker();
     },
   }));
-  for (const badge of model.badges) {
-    bar.append(el("span", { class: `badge ${badge.tone}`, text: badge.text, title: badge.title }));
-  }
-  if (model.followed) bar.append(el("span", { class: "quiet", text: model.followed }));
-  if (model.whitelist) bar.append(el("span", { class: "quiet", text: model.whitelist }));
+  paintChips(bar, model, handlers);
   if (model.suspect) {
     bar.append(el("button", {
       class: "chip suspect",
@@ -174,6 +239,20 @@ export function mountBar(host, model, handlers) {
   shadow.replaceChildren(el("style", { text: BAR_CSS }), bar);
 }
 
+/** Compact protect badge and tag chips. Same shadow host rules as the strike bar. */
+export function mountInline(host, model, handlers) {
+  const ready = ensureShadow(host, { guardClick: true });
+  host = ready.host;
+  const shadow = ready.shadow;
+  if (!shadow) return;
+  const signature = JSON.stringify(model.signature);
+  if (host.dataset.xslSig === signature && shadow.childElementCount) return;
+  host.dataset.xslSig = signature;
+  const bar = el("div", { class: "bar inline" });
+  paintChips(bar, model, handlers);
+  shadow.replaceChildren(el("style", { text: BAR_CSS }), bar);
+}
+
 let closeCurrent = null;
 
 function openSheet(shadow, build) {
@@ -208,6 +287,7 @@ export function openPicker(shadow, model) {
   return openSheet(shadow, (sheet, finish) => {
     sheet.append(el("h2", { text: model.title }));
     if (model.subtitle) sheet.append(el("p", { text: model.subtitle }));
+    if (model.note) sheet.append(el("p", { class: "safe", text: model.note }));
     const tags = el("div", { class: "tags" });
     for (const tag of model.tags) {
       tags.append(el("button", {

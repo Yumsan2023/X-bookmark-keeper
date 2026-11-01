@@ -1,3 +1,18 @@
+[data-xsl-name] {
+  all: initial !important;
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  box-sizing: border-box !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 2px 0 0 !important;
+  position: relative !important;
+  z-index: 2 !important;
+  pointer-events: auto !important;
+  color-scheme: dark !important;
+}
+
 [data-xsl-host] {
   all: initial !important;
   display: block !important;
@@ -45,6 +60,15 @@ article[data-testid="tweet"][data-xsl-collapsed="1"] > :not([data-xsl-keep]) {
 [data-xsl-placeholder] .xsl-ph-meta {
   color: #8b98a5 !important;
   flex: 1 1 120px !important;
+}
+
+[data-xsl-placeholder] .xsl-protect {
+  border-radius: 999px !important;
+  padding: 2px 8px !important;
+  font-weight: 700 !important;
+  color: #d8ffe8 !important;
+  background: rgba(0, 186, 124, 0.18) !important;
+  border: 1px solid rgba(0, 186, 124, 0.55) !important;
 }
 
 [data-xsl-placeholder] button {
