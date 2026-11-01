@@ -5,6 +5,7 @@
 
 import {
   allowedAiEndpoint,
+  addDistilledRules,
   addKeywordToPack,
   applyActions,
   applyMark,
@@ -117,7 +118,10 @@ async function suggest(input) {
     const hash = contentHash([handle, bio, text]);
     const cached = state.aiCache[hash];
     if (cached) {
-      return { ok: true, cached: true, label: cached.label || null, reason: cached.reason || "", verdict: cached.verdict || "none" };
+      const keywords = Array.isArray(cached.keywords)
+        ? cached.keywords.filter((item) => typeof item === "string").map((item) => item.slice(0, 40)).slice(0, 6)
+        : [];
+      return { ok: true, cached: true, label: cached.label || null, reason: cached.reason || "", verdict: cached.verdict || "none", keywords };
     }
     return {
       ok: true,
@@ -147,7 +151,7 @@ async function suggest(input) {
         messages: [
           {
             role: "system",
-            content: "Classify one X post for a personal ledger. Reply with JSON only: {\"label\":\"spam\"|\"marketing\"|\"none\",\"reason\":\"short\"}. spam = scams, phishing, engagement bait, crypto theft, porn spam. marketing = promotions, lead-gen, sales, affiliate bait. none = everything else. Do not tell the user to block or mute anyone.",
+            content: "Classify one X post for a personal ledger. Reply with JSON only: {\"label\":\"spam\"|\"marketing\"|\"none\",\"reason\":\"short\",\"keywords\":[\"verbatim phrase\"]}. spam = scams, phishing, engagement bait, crypto theft, porn spam. marketing = promotions, lead-gen, sales, affiliate bait. none = everything else. keywords: up to 5 short phrases copied verbatim from the post (2–40 characters). Use [] when the label is none or nothing short is worth keeping. Do not invent phrases. Do not tell the user to block or mute anyone.",
           },
           {
             role: "user",
@@ -178,11 +182,17 @@ async function suggest(input) {
   if (parsed.verdict === "invalid") return { ok: false, error: "bad-ai-response" };
   await locked(async () => {
     const state = await readRaw();
-    state.aiCache[prepared.hash] = { label: parsed.label, reason: parsed.reason, verdict: parsed.verdict, at: Date.now() };
+    state.aiCache[prepared.hash] = {
+      label: parsed.label,
+      reason: parsed.reason,
+      verdict: parsed.verdict,
+      keywords: parsed.keywords || [],
+      at: Date.now(),
+    };
     state.aiCache = pruneAiCache(state.aiCache);
     await writeRaw(state);
   });
-  return { ok: true, cached: false, label: parsed.label, reason: parsed.reason, verdict: parsed.verdict };
+  return { ok: true, cached: false, label: parsed.label, reason: parsed.reason, verdict: parsed.verdict, keywords: parsed.keywords || [] };
 }
 
 export function dispatch(message, sender = {}) {
@@ -282,6 +292,13 @@ export function dispatch(message, sender = {}) {
         if (denied) return denied;
         result = addKeywordToPack(state, message);
         if (result?.duplicate) return result;
+        break;
+      }
+      case "ADD_DISTILLED": {
+        const denied = timelineOrEditor(sender);
+        if (denied) return denied;
+        result = addDistilledRules(state, message);
+        if (!result?.ok || !result.added?.length) return result;
         break;
       }
       case "RECORD_HITS": {
