@@ -8,6 +8,7 @@
       </header>
       <nav>
         <a href="#overview" data-i18n="overview"></a>
+        <a href="#queue-panel" data-i18n="queueDash"></a>
         <a href="#ledger" data-i18n="ledger"></a>
         <a href="#thresholds" data-i18n="thresholds"></a>
         <a href="#rules" data-i18n="rules"></a>
@@ -25,6 +26,22 @@
         <p class="hint" data-i18n="openTimeline"></p>
         <p id="undo-line" class="hint"></p>
         <button id="undo-btn" type="button" data-i18n="undo"></button>
+      </section>
+
+      <section id="queue-panel">
+        <h2 data-i18n="queueDash"></h2>
+        <p class="hint" data-i18n="queueHelp"></p>
+        <div class="grid" id="queue-stats"></div>
+        <p id="queue-last-error" class="hint"></p>
+        <p id="queue-backoff" class="hint" hidden></p>
+        <p id="queue-hold" class="hint" hidden></p>
+        <div class="row">
+          <button id="queue-pause" type="button"></button>
+          <button id="queue-retry-failed" type="button"></button>
+          <button id="queue-clear" type="button"></button>
+          <button id="queue-clear-failed" class="danger" type="button"></button>
+        </div>
+        <div id="queue"></div>
       </section>
 
       <section id="ledger">
@@ -128,8 +145,6 @@
           <label class="inline"><input type="radio" name="importMode" value="replace" /> <span data-i18n="replace"></span></label>
           <label class="file"><span data-i18n="importJson"></span><input id="import-file" type="file" accept="application/json,.json" hidden /></label>
         </div>
-        <h2 data-i18n="queue"></h2>
-        <div id="queue"></div>
         <h2 data-i18n="log"></h2>
         <div id="log"></div>
         <label>

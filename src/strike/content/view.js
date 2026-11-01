@@ -229,6 +229,12 @@ export function openPicker(shadow, model) {
       }),
       model.whitelistLabel,
     ]));
+    if (model.queueMute || model.queueBlock) {
+      sheet.append(el("div", { class: "row" }, [
+        model.queueMute ? el("button", { type: "button", text: model.queueMute, onClick: () => finish({ type: "queue", action: "mute" }) }) : null,
+        model.queueBlock ? el("button", { type: "button", text: model.queueBlock, onClick: () => finish({ type: "queue", action: "block" }) }) : null,
+      ]));
+    }
     sheet.append(el("div", { class: "row" }, [
       el("button", { type: "button", text: model.hideLabel, onClick: () => finish({ type: "hide", hidden: !model.hidden }) }),
       el("button", { type: "button", text: model.cancel, onClick: () => finish(null) }),

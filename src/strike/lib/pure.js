@@ -14,6 +14,10 @@ export const QUEUE_MAX = 100;
 export const QUEUE_ATTEMPTS = 4;
 export const AI_CACHE_CAP = 400;
 export const INFLIGHT_MS = 45_000;
+/** Extra wait on top of the configured gap. Always at least one second. */
+export const ACTION_JITTER_MIN_MS = 1000;
+export const ACTION_JITTER_SPAN_MS = 1500;
+export const BACKOFF_STEPS_MS = [30_000, 120_000, 480_000, 900_000];
 
 let seq = 0;
 
@@ -80,6 +84,48 @@ export function clampInt(value, min, max, fallback) {
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
   return Math.min(max, Math.max(min, Math.round(n)));
+}
+
+/**
+ * Start-to-start gap before the next native menu click.
+ * Floor is the configured minimum (at least 1s). Jitter adds another 1–2.5s
+ * so a burst of queued mute/block actions cannot click in lockstep.
+ * @param {number} rateLimitMs
+ * @param {number | (() => number)} [random]
+ * @returns {number}
+ */
+export function nextActionDelayMs(rateLimitMs, random = Math.random) {
+  const floorMs = Math.max(1000, clampInt(rateLimitMs, 1000, 10000, 1200));
+  const roll = typeof random === "function" ? Number(random()) : Number(random);
+  const unit = Number.isFinite(roll) ? Math.min(1, Math.max(0, roll)) : 0;
+  const jitter = ACTION_JITTER_MIN_MS + Math.floor(unit * ACTION_JITTER_SPAN_MS);
+  return floorMs + jitter;
+}
+
+const RATE_LIMIT_RE = /(?:\b429\b|rate[\s-]?limit|too many requests|try again later|action limit|temporarily limited|限流|过于频繁|稍后再试|请求过多|操作过于频繁|超出速率)/i;
+
+/** Page-notice classifier only. This does not call X. */
+export function isRateLimitSignal(text) {
+  return RATE_LIMIT_RE.test(String(text || ""));
+}
+
+export function backoffDelayMs(strikes) {
+  const n = clampInt(strikes, 1, 20, 1);
+  return BACKOFF_STEPS_MS[Math.min(n - 1, BACKOFF_STEPS_MS.length - 1)];
+}
+
+/**
+ * Account and switches allow a mute/block to be queued.
+ * Whitelist, following, and unknown follow state are refused.
+ * Caller still has to honor auto vs confirm vs prompt-only.
+ */
+export function autoPlatformAllowed(settings, account, kind) {
+  if (!settings?.enablePlatformActions) return false;
+  if (!account || account.whitelist) return false;
+  if (account.followed !== false) return false;
+  if (kind === "mute") return !!settings.muteOnThreshold;
+  if (kind === "block") return !!settings.blockOnThreshold;
+  return false;
 }
 
 export function contentHash(parts) {
@@ -241,7 +287,7 @@ export function freshState(now = Date.now()) {
     log: [],
     undo: [],
     aiCache: {},
-    rate: { day: localDay(now), count: 0, nextAllowed: 0 },
+    rate: { day: localDay(now), count: 0, nextAllowed: 0, paused: false, backoffUntil: 0, lastError: "", rateStrikes: 0 },
     index: {},
     tweetTags: {},
   };
@@ -746,8 +792,8 @@ function thresholdPayload(state, account, tag, prevCount) {
     mode: state.settings.actionMode,
     suggest: {
       hide: !!state.settings.hideOnThreshold && !account.whitelist && account.followed !== true,
-      mute: !!state.settings.muteOnThreshold && !!state.settings.enablePlatformActions && account.followed === false && !account.whitelist,
-      block: !!state.settings.blockOnThreshold && !!state.settings.enablePlatformActions && account.followed === false && !account.whitelist,
+      mute: autoPlatformAllowed(state.settings, account, "mute"),
+      block: autoPlatformAllowed(state.settings, account, "block"),
     },
   };
 }
@@ -887,6 +933,11 @@ export function setHidden(state, input, now) {
   return { ok: true, changed: true, hidden: to };
 }
 
+function queueSource(input) {
+  if (input?.source === "manual" || input?.source === "undo") return input.source;
+  return "auto";
+}
+
 export function enqueue(state, input, now) {
   const handle = sanitizeHandle(input.handle) || state.ledger[input.userId]?.handle || "";
   const userId = input.userId || (handle ? accountIdFromHandle(handle) : "");
@@ -895,14 +946,20 @@ export function enqueue(state, input, now) {
     return { ok: false, error: "bad-action" };
   }
   if (!state.settings.enablePlatformActions) return { ok: false, error: "platform-off" };
+  const source = queueSource(input);
   const live = state.queue.find((item) => item.userId === userId && item.type === type && item.status !== "failed");
-  if (live) return { ok: true, item: live, duplicate: true };
+  if (live) {
+    if (source === "manual" || source === "undo") live.source = source;
+    return { ok: true, item: live, duplicate: true };
+  }
   const failed = state.queue.find((item) => item.userId === userId && item.type === type && item.status === "failed");
   if (failed) {
     failed.status = "pending";
     failed.attempts = 0;
     failed.lastError = "";
     failed.handle = handle;
+    failed.inflightAt = 0;
+    failed.source = source;
     return { ok: true, item: failed, duplicate: true };
   }
   if (state.queue.length >= QUEUE_MAX) return { ok: false, error: "queue-full" };
@@ -913,6 +970,7 @@ export function enqueue(state, input, now) {
     handle,
     attempts: 0,
     status: "pending",
+    source,
     inflightAt: 0,
     lastError: "",
     createdAt: now,
@@ -932,15 +990,16 @@ export function applyActions(state, input, now) {
   let block = !!input.block;
   const ignored = [];
   if (reason === "threshold-auto") {
+    if (state.settings.actionMode !== "auto") return { ok: false, error: "not-auto" };
     if (!account) return { ok: false, error: "no-account" };
     if (account.whitelist) return { ok: false, error: "whitelist" };
     if (account.followed === true) return { ok: false, error: "following" };
     if (!state.settings.hideOnThreshold) hide = false;
-    if (!(state.settings.muteOnThreshold && state.settings.enablePlatformActions && account.followed === false)) {
+    if (!autoPlatformAllowed(state.settings, account, "mute")) {
       if (mute) ignored.push("mute");
       mute = false;
     }
-    if (!(state.settings.blockOnThreshold && state.settings.enablePlatformActions && account.followed === false)) {
+    if (!autoPlatformAllowed(state.settings, account, "block")) {
       if (block) ignored.push("block");
       block = false;
     }
@@ -955,13 +1014,14 @@ export function applyActions(state, input, now) {
     const hidden = setHidden(state, { userId, handle, hidden: true }, now);
     if (hidden.changed) done.push("hide");
   }
+  const source = reason === "threshold-auto" ? "auto" : "manual";
   if (mute) {
-    const queued = enqueue(state, { userId, handle, type: "mute" }, now);
+    const queued = enqueue(state, { userId, handle, type: "mute", source }, now);
     if (queued.ok) done.push("mute");
     else ignored.push("mute");
   }
   if (block) {
-    const queued = enqueue(state, { userId, handle, type: "block" }, now);
+    const queued = enqueue(state, { userId, handle, type: "block", source }, now);
     if (queued.ok) done.push("block");
     else ignored.push("block");
   }
@@ -984,29 +1044,61 @@ export function expireInflight(state, now) {
   return changed;
 }
 
-export function peekAction(state, now) {
+export function peekAction(state, now, options = {}) {
   expireInflight(state, now);
-  return state.queue.find((item) => item.status === "pending") || null;
+  const pending = state.queue.filter((item) => item.status === "pending");
+  if (Array.isArray(options.handles)) {
+    const want = new Set(options.handles.map((handle) => String(handle || "").toLowerCase()).filter(Boolean));
+    return pending.find((item) => want.has(String(item.handle || "").toLowerCase())) || null;
+  }
+  return pending[0] || null;
+}
+
+/**
+ * Why the processor must not start a click right now.
+ * Empty queues do not report a hold, so the options page is not nagged.
+ */
+export function processorHold(state, now) {
+  const changed = expireInflight(state, now);
+  const hasPending = state.queue.some((item) => item.status === "pending");
+  if (!hasPending) return { hold: null, changed };
+  if (!state.settings.enablePlatformActions) return { hold: "platform-off", changed };
+  if (state.rate?.paused) return { hold: "paused", changed };
+  const backoffUntil = state.rate?.backoffUntil || 0;
+  if (now < backoffUntil) return { hold: "backoff", wait: backoffUntil - now, changed };
+  const day = localDay(now);
+  const count = state.rate?.day === day ? state.rate.count || 0 : 0;
+  if (count >= state.settings.dailyCap) return { hold: "daily-cap", changed };
+  const nextAllowed = state.rate?.nextAllowed || 0;
+  if (now < nextAllowed) return { hold: "rate", wait: nextAllowed - now, changed };
+  return { hold: null, changed };
 }
 
 export function beginAction(state, id, now) {
   const expired = expireInflight(state, now);
   const item = state.queue.find((entry) => entry.id === id);
   if (!item || item.status === "failed") return { ok: false, error: "missing", expired };
-  if (item.status === "inflight" && now - (item.inflightAt || 0) < 45_000) return { ok: false, error: "inflight", expired };
+  if (item.status === "inflight" && now - (item.inflightAt || 0) < INFLIGHT_MS) return { ok: false, error: "inflight", expired };
   if (!state.settings.enablePlatformActions) return { ok: false, error: "platform-off", expired };
-  const day = localDay(now);
-  if (state.rate.day !== day) {
-    state.rate.day = day;
-    state.rate.count = 0;
+  if (item.source !== "manual" && item.source !== "undo") {
+    const account = state.ledger[item.userId];
+    if (account?.whitelist || account?.followed === true) {
+      state.queue = state.queue.filter((entry) => entry.id !== item.id);
+      return { ok: false, error: account?.whitelist ? "whitelist" : "following", changed: true, expired };
+    }
   }
-  if (state.rate.count >= state.settings.dailyCap) return { ok: false, error: "daily-cap", expired };
-  if (now < (state.rate.nextAllowed || 0)) {
+  if (state.rate?.paused) return { ok: false, error: "paused", expired };
+  const backoffUntil = state.rate?.backoffUntil || 0;
+  if (now < backoffUntil) return { ok: false, error: "backoff", wait: backoffUntil - now, expired };
+  const today = localDay(now);
+  const count = state.rate?.day === today ? state.rate.count || 0 : 0;
+  if (count >= state.settings.dailyCap) return { ok: false, error: "daily-cap", expired };
+  if (now < (state.rate?.nextAllowed || 0)) {
     return { ok: false, error: "rate", wait: state.rate.nextAllowed - now, expired };
   }
-  const jitter = 200 + Math.floor(Math.random() * 500);
-  state.rate.nextAllowed = now + state.settings.rateLimitMs + jitter;
-  state.rate.count += 1;
+  state.rate.day = today;
+  state.rate.count = count + 1;
+  state.rate.nextAllowed = now + nextActionDelayMs(state.settings.rateLimitMs);
   item.status = "inflight";
   item.inflightAt = now;
   return { ok: true, item: { ...item } };
@@ -1018,6 +1110,9 @@ export function finishAction(state, input, now) {
   const item = state.queue[index];
   if (input.ok) {
     state.queue.splice(index, 1);
+    state.rate.rateStrikes = 0;
+    state.rate.backoffUntil = 0;
+    state.rate.lastError = "";
     log(state, { type: item.type, userId: item.userId, handle: item.handle, ok: true }, now);
     pushUndo(state, {
       id: uid("undo"),
@@ -1029,12 +1124,46 @@ export function finishAction(state, input, now) {
     });
     return { ok: true, item };
   }
+  const rateLimited = input.rateLimited === true || isRateLimitSignal(input.error);
   item.attempts = (item.attempts || 0) + 1;
   item.status = item.attempts >= QUEUE_ATTEMPTS ? "failed" : "pending";
-  item.lastError = snippet(input.error || "fail", 160);
+  item.lastError = snippet(input.error || (rateLimited ? "rate-limit" : "fail"), 160);
   item.inflightAt = 0;
+  if (rateLimited) {
+    state.rate.rateStrikes = clampInt((state.rate.rateStrikes || 0) + 1, 1, 20, 1);
+    state.rate.backoffUntil = now + backoffDelayMs(state.rate.rateStrikes);
+  }
+  state.rate.lastError = item.lastError;
   log(state, { type: item.type, userId: item.userId, handle: item.handle, ok: false, error: item.lastError }, now);
-  return { ok: true, item };
+  return { ok: true, item, rateLimited, backoffUntil: state.rate.backoffUntil || 0 };
+}
+
+export function setQueuePaused(state, paused, now) {
+  state.rate.paused = !!paused;
+  log(state, { type: paused ? "pause" : "resume", ok: true }, now);
+  return { ok: true, paused: state.rate.paused };
+}
+
+export function clearQueue(state, scope = "pending") {
+  const before = state.queue.length;
+  if (scope === "all") state.queue = [];
+  else if (scope === "failed") state.queue = state.queue.filter((item) => item.status !== "failed");
+  else state.queue = state.queue.filter((item) => item.status === "failed");
+  return { ok: true, removed: before - state.queue.length, queue: state.queue.length };
+}
+
+export function retryFailed(state) {
+  let retried = 0;
+  for (const item of state.queue) {
+    if (item.status !== "failed") continue;
+    item.status = "pending";
+    item.attempts = 0;
+    item.lastError = "";
+    item.inflightAt = 0;
+    retried += 1;
+  }
+  if (retried) state.rate.lastError = "";
+  return { ok: true, retried };
 }
 
 export function retryAction(state, id) {
@@ -1044,6 +1173,7 @@ export function retryAction(state, id) {
   item.attempts = 0;
   item.lastError = "";
   item.inflightAt = 0;
+  if (!state.queue.some((entry) => entry.lastError)) state.rate.lastError = "";
   return { ok: true, item };
 }
 
@@ -1093,7 +1223,7 @@ export function applyUndo(state, now) {
     }
   } else if (entry.kind === "platform") {
     const reverse = oppositeAction(entry.action);
-    const queued = enqueue(state, { userId: entry.userId, handle: entry.handle, type: reverse }, now);
+    const queued = enqueue(state, { userId: entry.userId, handle: entry.handle, type: reverse, source: "undo" }, now);
     if (!queued.ok) {
       state.undo.unshift(entry);
       return { ok: false, error: queued.error || "undo-failed" };
@@ -1212,8 +1342,36 @@ export function searchLedger(state, query, limit = 40) {
   return filtered.slice(0, limit);
 }
 
-export function statsOf(state, now = Date.now()) {
+export function queueDashboard(state, now = Date.now()) {
   const day = localDay(now);
+  const pending = state.queue.filter((item) => item.status === "pending");
+  const inflight = state.queue.filter((item) => item.status === "inflight");
+  const failed = state.queue.filter((item) => item.status === "failed");
+  const lastFromItems = [...state.queue].reverse().find((item) => item.lastError)?.lastError || "";
+  return {
+    length: pending.length + inflight.length,
+    pending: pending.length,
+    inflight: inflight.length,
+    failed: failed.length,
+    failedItems: failed.map((item) => ({
+      id: item.id,
+      type: item.type,
+      handle: item.handle,
+      lastError: item.lastError || "",
+      attempts: item.attempts || 0,
+    })),
+    lastError: state.rate?.lastError || lastFromItems || "",
+    actionsToday: state.rate?.day === day ? state.rate.count || 0 : 0,
+    dailyCap: state.settings.dailyCap,
+    paused: !!state.rate?.paused,
+    backoffUntil: state.rate?.backoffUntil || 0,
+    nextAllowed: state.rate?.nextAllowed || 0,
+    rateStrikes: state.rate?.rateStrikes || 0,
+  };
+}
+
+export function statsOf(state, now = Date.now()) {
+  const dash = queueDashboard(state, now);
   const byTag = {};
   let strikes = 0;
   for (const account of Object.values(state.ledger)) {
@@ -1228,10 +1386,13 @@ export function statsOf(state, now = Date.now()) {
     hidden: Object.keys(state.hidden).length,
     tweets: Object.keys(state.tweets).length,
     byTag,
-    queue: state.queue.filter((item) => item.status === "pending" || item.status === "inflight").length,
-    failed: state.queue.filter((item) => item.status === "failed").length,
-    actionsToday: state.rate.day === day ? state.rate.count : 0,
-    dailyCap: state.settings.dailyCap,
+    queue: dash.length,
+    failed: dash.failed,
+    actionsToday: dash.actionsToday,
+    dailyCap: dash.dailyCap,
+    paused: dash.paused,
+    lastError: dash.lastError,
+    backoffUntil: dash.backoffUntil,
     mode: state.settings.actionMode,
     rulesEnabled: !!state.settings.rulesEnabled,
     aiEnabled: !!state.settings.ai.enabled,
@@ -1459,6 +1620,7 @@ export function normalizeState(raw, now = Date.now()) {
     handle: sanitizeHandle(item.handle),
     attempts: clampInt(item.attempts, 0, 20, 0),
     status: ["pending", "inflight", "failed"].includes(item.status) ? item.status : "pending",
+    source: item.source === "manual" || item.source === "undo" ? item.source : "auto",
     inflightAt: timeOf(item.inflightAt, 0),
     lastError: snippet(item.lastError, 160),
     createdAt: timeOf(item.createdAt, now),
@@ -1470,6 +1632,10 @@ export function normalizeState(raw, now = Date.now()) {
     day: typeof raw.rate?.day === "string" ? raw.rate.day : localDay(now),
     count: clampInt(raw.rate?.count, 0, 10000, 0),
     nextAllowed: timeOf(raw.rate?.nextAllowed, 0),
+    paused: raw.rate?.paused === true,
+    backoffUntil: timeOf(raw.rate?.backoffUntil, 0),
+    lastError: snippet(raw.rate?.lastError, 160),
+    rateStrikes: clampInt(raw.rate?.rateStrikes, 0, 20, 0),
   };
   rebuildIndex(state);
   return state;

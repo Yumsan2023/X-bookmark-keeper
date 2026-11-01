@@ -9,6 +9,7 @@ export async function mountStrikeOptions(root) {
   let draft = null;
   let ledger = [];
   let queue = [];
+  let dashboard = null;
   let log = [];
   let undo = null;
   let stats = null;
@@ -299,6 +300,51 @@ export async function mountStrikeOptions(root) {
     }
   }
 
+  function renderQueueDash() {
+    const dash = dashboard || {};
+    const root = $("#queue-stats");
+    root.replaceChildren();
+    const cards = [
+      [dash.length ?? 0, "queueLength"],
+      [dash.failed ?? 0, "queueFailed"],
+      [`${dash.actionsToday ?? 0}/${dash.dailyCap ?? 0}`, "dailyUsed"],
+      [dash.paused ? t("queuePausedState") : t("queueRunning"), "queueState"],
+    ];
+    for (const [value, key] of cards) {
+      const card = document.createElement("div");
+      card.className = "stat";
+      const number = document.createElement("b");
+      number.textContent = String(value);
+      const caption = document.createElement("span");
+      caption.textContent = t(key);
+      card.append(number, caption);
+      root.append(card);
+    }
+    const err = $("#queue-last-error");
+    err.textContent = dash.lastError ? t("lastError", { error: dash.lastError }) : t("noLastError");
+    err.className = dash.lastError ? "hint queue-error" : "hint";
+    const backoff = $("#queue-backoff");
+    const until = dash.backoffUntil || 0;
+    if (until > Date.now()) {
+      backoff.hidden = false;
+      backoff.textContent = t("backoffUntil", { time: new Date(until).toLocaleTimeString() });
+    } else {
+      backoff.hidden = true;
+      backoff.textContent = "";
+    }
+    const hold = $("#queue-hold");
+    hold.hidden = !dash.paused;
+    hold.textContent = dash.paused ? t("pausedHint") : "";
+    const pauseBtn = $("#queue-pause");
+    pauseBtn.textContent = dash.paused ? t("resumeQueue") : t("pauseQueue");
+    $("#queue-retry-failed").textContent = t("retryFailed");
+    $("#queue-retry-failed").disabled = !(dash.failed > 0);
+    $("#queue-clear").textContent = t("clearQueue");
+    $("#queue-clear").disabled = !(dash.length > 0);
+    $("#queue-clear-failed").textContent = t("clearFailed");
+    $("#queue-clear-failed").disabled = !(dash.failed > 0);
+  }
+
   function renderQueue() {
     const root = $("#queue");
     root.replaceChildren();
@@ -312,15 +358,18 @@ export async function mountStrikeOptions(root) {
     for (const item of queue) {
       const row = document.createElement("div");
       row.className = "queue-item";
+      const status = item.status === "failed" ? t("failed") : item.status === "inflight" ? t("inflight") : t("pending");
       const text = document.createElement("div");
-      text.textContent = `${t(item.type)} @${item.handle} · ${item.status === "failed" ? t("failed") : t("pending")}${item.lastError ? ` · ${item.lastError}` : ""}`;
+      text.textContent = `${t(item.type)} @${item.handle} · ${status}${item.attempts ? ` · ${item.attempts}` : ""}${item.lastError ? ` · ${item.lastError}` : ""}`;
       row.append(text);
       const controls = document.createElement("div");
       controls.className = "row";
-      controls.append(button(t("retry"), async () => {
-        await send({ type: "RETRY_ACTION", id: item.id });
-        await reload();
-      }));
+      if (item.status === "failed") {
+        controls.append(button(t("retry"), async () => {
+          await send({ type: "RETRY_ACTION", id: item.id });
+          await reload();
+        }));
+      }
       controls.append(button(t("cancel"), async () => {
         await send({ type: "CANCEL_ACTION", id: item.id });
         await reload();
@@ -405,6 +454,15 @@ export async function mountStrikeOptions(root) {
     draft = result.settings;
     ledger = result.ledger || [];
     queue = result.queue || [];
+    dashboard = result.dashboard || {
+      length: queue.filter((item) => item.status !== "failed").length,
+      failed: queue.filter((item) => item.status === "failed").length,
+      lastError: result.stats?.lastError || "",
+      actionsToday: result.stats?.actionsToday ?? 0,
+      dailyCap: result.stats?.dailyCap ?? 0,
+      paused: !!result.stats?.paused,
+      backoffUntil: result.stats?.backoffUntil || 0,
+    };
     log = result.log || [];
     undo = result.undo;
     stats = result.stats;
@@ -413,6 +471,7 @@ export async function mountStrikeOptions(root) {
     fillForm();
     renderStats();
     renderLedger();
+    renderQueueDash();
     renderQueue();
     renderLog();
   }
@@ -425,6 +484,7 @@ export async function mountStrikeOptions(root) {
     renderLedger();
     renderPacks();
     renderThresholds();
+    renderQueueDash();
     renderQueue();
     renderLog();
   });
@@ -432,6 +492,28 @@ export async function mountStrikeOptions(root) {
   $("#query").addEventListener("input", () => renderLedger());
   $("#save").addEventListener("click", save);
   $("#save-top").addEventListener("click", save);
+  $("#queue-pause").addEventListener("click", async () => {
+    const result = await send({ type: "SET_QUEUE_PAUSED", paused: !dashboard?.paused });
+    note(result.ok ? t("saved") : t(result.error || "error"), result.ok ? "ok" : "bad");
+    if (result.ok) await reload();
+  });
+  $("#queue-retry-failed").addEventListener("click", async () => {
+    const result = await send({ type: "RETRY_FAILED" });
+    note(result.ok ? t("saved") : t(result.error || "error"), result.ok ? "ok" : "bad");
+    if (result.ok) await reload();
+  });
+  $("#queue-clear").addEventListener("click", async () => {
+    if (!window.confirm(t("confirmClearQueue"))) return;
+    const result = await send({ type: "CLEAR_QUEUE", scope: "pending" });
+    note(result.ok ? t("saved") : t(result.error || "error"), result.ok ? "ok" : "bad");
+    if (result.ok) await reload();
+  });
+  $("#queue-clear-failed").addEventListener("click", async () => {
+    if (!window.confirm(t("confirmClearFailed"))) return;
+    const result = await send({ type: "CLEAR_QUEUE", scope: "failed" });
+    note(result.ok ? t("saved") : t(result.error || "error"), result.ok ? "ok" : "bad");
+    if (result.ok) await reload();
+  });
   $("#undo-btn").addEventListener("click", async () => {
     const result = await send({ type: "UNDO" });
     note(result.ok ? t("undone") : t(result.error === "empty" ? "undoEmpty" : "error"), result.ok ? "ok" : "bad");
