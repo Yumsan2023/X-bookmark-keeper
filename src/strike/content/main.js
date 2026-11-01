@@ -282,10 +282,6 @@ async function afterThreshold(result, meta) {
     toast(overlay, t("skipWhitelist", { handle: meta.handle }));
     return;
   }
-  if (threshold.skipped === "following") {
-    toast(overlay, t("skipFollowing", { handle: meta.handle }));
-    return;
-  }
   if (threshold.mode === "prompt-only") {
     toast(overlay, t("promptOnly", { handle: meta.handle, tag, count: threshold.count, n: threshold.n }));
     return;
@@ -314,7 +310,11 @@ async function afterThreshold(result, meta) {
   const choice = await withOverlay(() => openChoice(overlay, {
     title: t("thresholdTitle", { tag }),
     body: t("thresholdBody", { handle: meta.handle, tag, count: threshold.count, n: threshold.n }),
-    warning: threshold.followed == null ? t("thresholdWarnUnknown") : "",
+    warning: threshold.followed === true
+      ? t("thresholdWarnFollow")
+      : threshold.followed == null
+        ? t("thresholdWarnUnknown")
+        : "",
     checks: [
       { id: "hide", label: t("hideLocal"), checked: !!threshold.suggest.hide, hint: "" },
       {
