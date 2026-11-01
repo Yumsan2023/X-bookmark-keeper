@@ -121,6 +121,7 @@ button, .tag {
   color: #e7e9ea; padding: 7px 12px; font: inherit; cursor: pointer;
 }
 .primary { background: #e85d04; border-color: #e85d04; color: #1a1008; font-weight: 700; }
+.fp { color: #3a2d05; background: #f0c94d; border-color: #f0c94d; font-weight: 700; }
 .tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
 .tag.on { background: rgba(232,93,4,.18); border-color: #e85d04; }
 .tag small { color: #8b98a5; margin-left: 4px; }
@@ -381,6 +382,12 @@ export function openChoice(shadow, model) {
       sheet.append(el("label", {}, [input, el("span", {}, [check.label, check.hint ? el("small", { text: check.hint }) : null])]));
     }
     sheet.append(el("div", { class: "row" }, [
+      model.falsePositive ? el("button", {
+        class: "fp",
+        type: "button",
+        text: model.falsePositive,
+        onClick: () => finish({ falsePositive: true }),
+      }) : null,
       el("button", { type: "button", text: model.cancel, onClick: () => finish(null) }),
       model.neutral ? el("button", { type: "button", text: model.neutral, onClick: () => finish({ confirm: false }) }) : null,
       el("button", {
@@ -428,6 +435,12 @@ export function openAiSuggest(shadow, model) {
       finish({ save: true, packId: select?.value || "", rules: picked });
     };
     sheet.append(el("div", { class: "row" }, [
+      model.falsePositive ? el("button", {
+        class: "fp",
+        type: "button",
+        text: model.falsePositive,
+        onClick: () => finish({ falsePositive: true }),
+      }) : null,
       el("button", { type: "button", text: model.cancel, onClick: () => finish(null) }),
       rules.length
         ? el("button", {
@@ -443,6 +456,51 @@ export function openAiSuggest(shadow, model) {
         text: model.confirm,
         onClick: () => finish({ confirm: true }),
       }),
+    ]));
+  });
+}
+
+export function openFalsePositive(shadow, model) {
+  return openSheet(shadow, (sheet, finish) => {
+    let exceptionOn = false;
+    let scope = model.defaultScope === "any" ? "any" : "author";
+    sheet.append(el("h2", { text: model.title }));
+    sheet.append(el("p", { text: model.body }));
+    if (model.note) sheet.append(el("p", { class: "safe", text: model.note }));
+    const items = model.items || [];
+    if (items.length) {
+      const list = el("div", { class: "rules" });
+      for (const item of items) list.append(el("p", { text: item.label }));
+      sheet.append(list);
+    }
+    if (model.phrase) {
+      const box = el("input", { type: "checkbox" });
+      box.addEventListener("change", () => { exceptionOn = !!box.checked; });
+      sheet.append(el("label", { class: "check" }, [box, model.phraseLabel || ""]));
+      if (model.phraseHelp) sheet.append(el("p", { text: model.phraseHelp }));
+      const author = el("input", { type: "radio", name: "xsl-fp-scope" });
+      const any = el("input", { type: "radio", name: "xsl-fp-scope" });
+      if (scope === "any") any.checked = true;
+      else author.checked = true;
+      author.addEventListener("change", () => { if (author.checked) scope = "author"; });
+      any.addEventListener("change", () => { if (any.checked) scope = "any"; });
+      sheet.append(el("label", {}, [author, model.scopeAuthor || ""]));
+      sheet.append(el("label", {}, [any, model.scopeAny || ""]));
+    }
+    const canApply = items.length > 0 || !!model.phrase || model.allowEmpty === true;
+    sheet.append(el("div", { class: "row" }, [
+      el("button", { type: "button", text: model.cancel, onClick: () => finish(null) }),
+      canApply ? el("button", {
+        class: "primary",
+        type: "button",
+        text: model.confirm,
+        onClick: () => finish({
+          confirm: true,
+          exception: exceptionOn && !!model.phrase,
+          scope,
+          phrase: model.phrase || "",
+        }),
+      }) : null,
     ]));
   });
 }

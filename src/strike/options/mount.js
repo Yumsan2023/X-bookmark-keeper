@@ -12,6 +12,7 @@ export async function mountStrikeOptions(root) {
   let dashboard = null;
   let log = [];
   let hitLog = [];
+  let vetoes = [];
   let undo = null;
   let stats = null;
   let keyDirty = false;
@@ -77,6 +78,7 @@ export async function mountStrikeOptions(root) {
     const commentModeInput = root.querySelector(`input[name="commentHitMode"][value="${commentMode}"]`);
     if (commentModeInput) commentModeInput.checked = true;
     $("#libraryChipThreshold").value = draft.libraryChipThreshold ?? 3;
+    $("#vetoCooldownDays").value = draft.vetoCooldownDays ?? 14;
     $("#dailyCap").value = draft.dailyCap;
     $("#rateLimitMs").value = draft.rateLimitMs;
     $("#shortcut-spam").textContent = draft.shortcuts.spam;
@@ -91,6 +93,7 @@ export async function mountStrikeOptions(root) {
     $("#pack-text").value = packsToText(draft.keywordPacks);
     renderThresholds();
     renderPacks();
+    renderVetoes();
     renderHitLog();
   }
 
@@ -387,6 +390,42 @@ export async function mountStrikeOptions(root) {
     }
   }
 
+  function renderVetoes() {
+    const root = $("#veto-list");
+    root.replaceChildren();
+    const rows = Array.isArray(vetoes) ? vetoes : [];
+    if (!rows.length) {
+      const empty = document.createElement("p");
+      empty.className = "quiet";
+      empty.textContent = t("emptyVetoes");
+      root.append(empty);
+      return;
+    }
+    const now = Date.now();
+    for (const item of rows) {
+      const row = document.createElement("div");
+      row.className = "log-item";
+      const when = new Date(item.at).toLocaleString();
+      const name = item.packName || (item.kind === "ai" ? t("fpAiDismiss") : t("fpAiWord", { pattern: item.pattern || "" }));
+      const pattern = item.pattern ? ` · ${item.pattern}` : "";
+      let life = t("vetoForever");
+      if (item.kind === "exception") life = t("vetoPhrase", { phrase: item.phrase || "" });
+      else if (item.until && item.until > now) life = t("vetoUntil", { time: new Date(item.until).toLocaleString() });
+      else if (item.until && item.until <= now) life = t("vetoExpired");
+      const scope = item.kind === "exception"
+        ? (item.phraseScope === "any" ? t("fpScopeAny") : t("fpScopeAuthor", { handle: item.handle || "?" }))
+        : "";
+      const text = document.createElement("div");
+      text.textContent = `${when} · ${name}${pattern} · ${life}${scope ? ` · ${scope}` : ""}`;
+      row.append(text, button(t("undoVeto"), async () => {
+        const result = await send({ type: "UNDO_VETO", id: item.id });
+        note(result.ok ? t("vetoUndone") : t(result.error || "error"), result.ok ? "ok" : "bad");
+        if (result.ok) await reload();
+      }));
+      root.append(row);
+    }
+  }
+
   function renderHitLog() {
     const root = $("#hit-log");
     root.replaceChildren();
@@ -436,6 +475,7 @@ export async function mountStrikeOptions(root) {
     draft.commentScanEnabled = $("#commentScanEnabled").checked;
     draft.commentHitMode = root.querySelector('input[name="commentHitMode"]:checked')?.value === "prompt" ? "prompt" : "fold";
     draft.libraryChipThreshold = Number($("#libraryChipThreshold").value);
+    draft.vetoCooldownDays = Number($("#vetoCooldownDays").value);
     draft.dailyCap = Number($("#dailyCap").value);
     draft.rateLimitMs = Number($("#rateLimitMs").value);
     draft.ai = {
@@ -496,6 +536,7 @@ export async function mountStrikeOptions(root) {
     };
     log = result.log || [];
     hitLog = result.hitLog || [];
+    vetoes = result.vetoes || [];
     undo = result.undo;
     stats = result.stats;
     lang = resolveLang(draft.language, navigator.language);
@@ -520,6 +561,7 @@ export async function mountStrikeOptions(root) {
     renderQueue();
     renderLog();
     renderHitLog();
+    renderVetoes();
   });
 
   $("#query").addEventListener("input", () => renderLedger());

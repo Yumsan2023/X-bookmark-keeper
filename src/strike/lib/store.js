@@ -7,7 +7,9 @@ import {
   allowedAiEndpoint,
   addDistilledRules,
   addKeywordToPack,
+  aiSuggestionDismissed,
   applyActions,
+  applyFalsePositive,
   applyMark,
   applyUndo,
   applyUnmark,
@@ -17,7 +19,6 @@ import {
   clearHitLog,
   clearQueue,
   clearTag,
-  contentHash,
   deleteAccount,
   describeUndo,
   enqueue,
@@ -47,7 +48,9 @@ import {
   setWhitelist,
   snippet,
   statsOf,
+  suggestionHash,
   toPublicSettings,
+  undoVeto,
 } from "./pure.js";
 
 const STATE_KEY = "xsl";
@@ -116,7 +119,18 @@ async function suggest(input) {
     const handle = sanitizeHandle(input.handle);
     const text = snippet(input.text, 500);
     const bio = snippet(input.bio, 280);
-    const hash = contentHash([handle, bio, text]);
+    const hash = suggestionHash({ handle, text, bio });
+    if (aiSuggestionDismissed(state.vetoes, hash, Date.now())) {
+      return {
+        ok: true,
+        cached: true,
+        dismissed: true,
+        label: null,
+        reason: "",
+        verdict: "none",
+        keywords: [],
+      };
+    }
     const cached = state.aiCache[hash];
     if (cached) {
       const keywords = Array.isArray(cached.keywords)
@@ -230,6 +244,7 @@ export function dispatch(message, sender = {}) {
           dashboard: queueDashboard(state, now),
           log: state.log.slice(0, 30),
           hitLog: state.hitLog.slice(0, 40),
+          vetoes: Array.isArray(state.vetoes) ? state.vetoes.slice(0, 40) : [],
           undo: describeUndo(state.undo[0]),
         };
         break;
@@ -303,6 +318,20 @@ export function dispatch(message, sender = {}) {
         if (denied) return denied;
         result = addDistilledRules(state, message);
         if (!result?.ok || !result.added?.length) return result;
+        break;
+      }
+      case "APPLY_VETO": {
+        const denied = timelineOrEditor(sender);
+        if (denied) return denied;
+        result = applyFalsePositive(state, message, now);
+        if (!result?.ok) return result;
+        break;
+      }
+      case "UNDO_VETO": {
+        const denied = editorOnly(sender);
+        if (denied) return denied;
+        result = undoVeto(state, message);
+        if (!result?.ok) return result;
         break;
       }
       case "RECORD_HITS": {

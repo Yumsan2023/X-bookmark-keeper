@@ -140,6 +140,14 @@
           <button id="pack-text-export" type="button" data-i18n="exportPackText"></button>
           <label class="file"><span data-i18n="importPackText"></span><input id="pack-text-file" type="file" accept="text/plain,.txt" hidden /></label>
         </div>
+        <h2 data-i18n="vetoes"></h2>
+        <p class="hint" data-i18n="vetoHelp"></p>
+        <label>
+          <span data-i18n="vetoCooldownDays"></span>
+          <input id="vetoCooldownDays" type="number" min="0" max="365" />
+        </label>
+        <p class="hint" data-i18n="vetoCooldownHelp"></p>
+        <div id="veto-list"></div>
         <label class="inline"><input id="hitHistory" type="checkbox" /> <span data-i18n="hitHistory"></span></label>
         <p class="hint" data-i18n="hitHistoryHelp"></p>
         <h2 data-i18n="hits"></h2>

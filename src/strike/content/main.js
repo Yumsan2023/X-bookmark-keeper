@@ -8,6 +8,7 @@ import {
   contentHash,
   distillSuggestion,
   eventMatchesShortcut,
+  falsePositivePlan,
   isRateLimitSignal,
   isTypingTarget,
   matchRules,
@@ -17,7 +18,7 @@ import {
   timelineChrome,
 } from "../lib/pure.js";
 import { performPlatformAction } from "./act.js";
-import { createOverlay, mountBar, mountInline, openAiSuggest, openChoice, openPicker, toast } from "./view.js";
+import { createOverlay, mountBar, mountInline, openAiSuggest, openChoice, openFalsePositive, openPicker, toast } from "./view.js";
 
 const expanded = new Set();
 const aiAsked = new Set();
@@ -256,7 +257,13 @@ function keywordScanOn(meta) {
 function suspectFor(meta) {
   if (!keywordScanOn(meta)) return null;
   const settings = snapshot?.settings;
-  const matched = matchRules(settings.keywordPacks, { text: meta.text, handle: meta.handle, bio: meta.bio });
+  const matched = matchRules(settings.keywordPacks, {
+    text: meta.text,
+    handle: meta.handle,
+    bio: meta.bio,
+    vetoes: snapshot?.vetoes,
+    now: Date.now(),
+  });
   if (!matched.suspect) return null;
   return matched;
 }
@@ -580,10 +587,84 @@ async function confirmRule(article) {
     title: t("ruleTitle"),
     body: t("ruleBody", { pack: reason.packName, tag: tagLabel(tag, lang) }),
     checks: [],
+    falsePositive: t("notSpam"),
     confirm: t("ruleMark"),
     cancel: t("cancel"),
   }));
+  if (choice?.falsePositive) {
+    await offerFalsePositive(meta, "suspect");
+    return;
+  }
   if (choice?.confirm) await markTag(meta, tag, "rule");
+}
+
+async function offerFalsePositive(meta, source, extra = {}) {
+  const settings = snapshot?.settings || {};
+  const plan = falsePositivePlan({
+    packs: settings.keywordPacks,
+    vetoes: snapshot?.vetoes,
+    cooldownDays: settings.vetoCooldownDays,
+    now: Date.now(),
+    source,
+    text: meta.text,
+    bio: meta.bio,
+    handle: meta.handle,
+    label: extra.label,
+    reason: extra.reason,
+    keywords: extra.keywords,
+  });
+  const choice = await withOverlay(() => openFalsePositive(overlay, {
+    title: t("fpTitle"),
+    body: t("fpBody"),
+    note: plan.cooldownDays > 0 ? t("fpCooldown", { days: plan.cooldownDays }) : t("fpForever"),
+    items: plan.items.map((item) => ({
+      label: item.packName
+        ? t("fpItem", { pack: item.packName, pattern: item.pattern })
+        : t("fpAiWord", { pattern: item.pattern }),
+    })),
+    phrase: plan.phrase,
+    phraseLabel: plan.phrase ? t("fpException", { phrase: plan.phrase }) : "",
+    phraseHelp: plan.phrase ? t("fpExceptionHelp") : "",
+    scopeAuthor: t("fpScopeAuthor", { handle: meta.handle || "" }),
+    scopeAny: t("fpScopeAny"),
+    defaultScope: meta.handle ? "author" : "any",
+    allowEmpty: source === "ai",
+    confirm: t("fpConfirm"),
+    cancel: t("cancel"),
+  }));
+  if (!choice?.confirm) return;
+  const saved = await send({
+    type: "APPLY_VETO",
+    source,
+    text: meta.text,
+    bio: meta.bio,
+    handle: meta.handle,
+    tweetId: meta.tweetId,
+    label: extra.label || "",
+    reason: extra.reason || "",
+    keywords: extra.keywords || [],
+    items: plan.items,
+    exception: !!choice.exception,
+    phraseScope: choice.scope === "any" ? "any" : "author",
+  });
+  if (source === "ai") {
+    aiResults.set(meta.tweetId, {
+      ok: true,
+      label: null,
+      verdict: "none",
+      reason: "",
+      keywords: [],
+      dismissed: true,
+    });
+    scan();
+  }
+  if (!saved?.ok) {
+    toast(overlay, t(saved?.error === "empty-veto" ? "fpEmpty" : (saved?.error || "error")));
+    return;
+  }
+  if (saved.phrase) toast(overlay, t("fpSavedPhrase", { count: saved.count || 0, phrase: saved.phrase }));
+  else if (!saved.count) toast(overlay, t("fpSavedAi"));
+  else toast(overlay, t("fpSaved", { count: saved.count }));
 }
 
 async function askAi(meta) {
@@ -638,10 +719,19 @@ async function confirmAi(article) {
     packId: suggestPackId(settings.keywordPacks, result.label),
     packLabel: t("addKeywordPack"),
     save: t("saveAsRule"),
+    falsePositive: t("notSpam"),
     confirm: t("ruleMark"),
     cancel: t("cancel"),
   }));
   if (!choice) return;
+  if (choice.falsePositive) {
+    await offerFalsePositive(meta, "ai", {
+      label: result.label,
+      reason: result.reason,
+      keywords: result.keywords,
+    });
+    return;
+  }
   if (choice.save) {
     const saved = await send({
       type: "ADD_DISTILLED",
@@ -686,7 +776,7 @@ function render(article, meta) {
     ...chrome,
     signature: {
       ...chrome.signature,
-      suspect: matched?.reasons?.map((reason) => reason.packId).join(",") || "",
+      suspect: matched?.reasons?.map((reason) => `${reason.packId}:${reason.pattern}:${reason.cooled ? 1 : 0}`).join(",") || "",
       ai: ai ? `${ai.label || ai.verdict}:${ai.reason || ""}` : "",
       ask: !!settings?.ai?.enabled,
     },
@@ -694,7 +784,7 @@ function render(article, meta) {
     shortcutTitle: `${shortcuts.spam || "Alt+S"} · ${shortcuts.marketing || "Alt+M"} · ${shortcuts.picker || "Alt+T"}`,
     suspect: matched ? {
       label: matched.reasons.length > 1 ? t("suspectCount", { count: matched.reasons.length }) : t("suspect"),
-      title: matched.reasons.map((reason) => reason.packName).join(" · "),
+      title: matched.reasons.map((reason) => reason.cooled ? `${reason.packName} · ${t("fpCooled")}` : reason.packName).join(" · "),
     } : null,
     ai: ai?.ok ? {
       label: ai.label ? t("aiChip", { tag: tagLabel(ai.label, lang) }) : t("aiNone"),
