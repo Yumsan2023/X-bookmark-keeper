@@ -54,8 +54,44 @@ article[role="article"][data-xsl-collapsed="1"] > :not([data-xsl-keep]) {
   font: 13px/1.3 ui-sans-serif, "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif !important;
 }
 
+[data-xsl-placeholder] .xsl-ph-toggle {
+  all: unset !important;
+  display: inline-flex !important;
+  flex: 1 1 auto !important;
+  align-items: center !important;
+  gap: 8px !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  cursor: pointer !important;
+}
+
+[data-xsl-placeholder] .xsl-ph-toggle:focus-visible {
+  outline: 2px solid #e85d04 !important;
+  outline-offset: 2px !important;
+  border-radius: 6px !important;
+}
+
 [data-xsl-placeholder] .xsl-ph-title {
   font-weight: 650 !important;
+  min-width: 0 !important;
+  flex: 0 1 auto !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+[data-xsl-placeholder] .xsl-ph-reason {
+  flex: 0 0 auto !important;
+  max-width: 14em !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  border-radius: 999px !important;
+  padding: 1px 8px !important;
+  color: #3a2d05 !important;
+  background: #f0c94d !important;
+  font-weight: 700 !important;
+  font-size: 12px !important;
 }
 
 [data-xsl-placeholder] .xsl-ph-meta {

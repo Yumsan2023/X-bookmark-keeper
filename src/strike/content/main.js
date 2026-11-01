@@ -9,6 +9,7 @@ import {
   distillSuggestion,
   eventMatchesShortcut,
   falsePositivePlan,
+  foldReasonSummary,
   isRateLimitSignal,
   isTypingTarget,
   matchRules,
@@ -21,6 +22,7 @@ import { performPlatformAction } from "./act.js";
 import { createOverlay, mountBar, mountInline, openAiSuggest, openChoice, openFalsePositive, openPicker, toast } from "./view.js";
 
 const expanded = new Set();
+const foldToggle = new WeakMap();
 const aiAsked = new Set();
 const aiResults = new Map();
 const seenSent = new Set();
@@ -151,7 +153,46 @@ function syncNameHost(article, model) {
   mountInline(host, model, { onChip: () => openTags(article) });
 }
 
-function placeholder(article, meta, record, kind, onSuspect) {
+function formatFoldReason(summary) {
+  if (!summary) return "";
+  if (summary.source === "keyword") {
+    return summary.extra
+      ? t("foldReasonKeywordMore", { pattern: summary.pattern, count: summary.extra })
+      : t("foldReasonKeyword", { pattern: summary.pattern });
+  }
+  if (summary.source === "regex") {
+    return summary.extra
+      ? t("foldReasonRuleMore", { pattern: summary.pattern, count: summary.extra })
+      : t("foldReasonRule", { pattern: summary.pattern });
+  }
+  if (summary.source === "pack") return t("foldReasonPack", { count: summary.extra });
+  if (summary.source === "ai") return t("aiChip", { tag: tagLabel(summary.aiLabel, lang) });
+  if (summary.source === "tag") {
+    return summary.extra
+      ? t("foldReasonTagMore", { tag: summary.tagText, count: summary.extra })
+      : summary.tagText;
+  }
+  return "";
+}
+
+function foldReasonTitle(summary) {
+  if (!summary) return "";
+  const parts = [];
+  for (const row of summary.details || []) {
+    if (!row?.pattern && !row?.packName) continue;
+    if (summary.source === "tag") {
+      if (row.pattern) parts.push(row.pattern);
+      continue;
+    }
+    const label = [row.packName, row.pattern].filter(Boolean).join(" · ");
+    if (!label) continue;
+    parts.push(row.cooled ? `${label} · ${t("fpCooled")}` : label);
+  }
+  if (summary.aiLabel) parts.push(t("aiChip", { tag: tagLabel(summary.aiLabel, lang) }));
+  return parts.join(" · ");
+}
+
+function placeholder(article, meta, record, kind, extras = {}) {
   let node = article.querySelector(":scope > [data-xsl-placeholder]");
   if (!node) {
     node = document.createElement("div");
@@ -159,33 +200,81 @@ function placeholder(article, meta, record, kind, onSuspect) {
     node.dataset.xslKeep = "1";
     article.prepend(node);
   }
+  foldToggle.set(node, extras.onToggle || null);
+  if (!node.dataset.bound) {
+    node.dataset.bound = "1";
+    node.addEventListener("click", (event) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest("button")) return;
+      stop(event);
+      foldToggle.get(node)?.();
+    });
+    node.addEventListener("pointerdown", (event) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest("button")) return;
+      stop(event);
+    });
+  }
   const chrome = chromeFor(meta, record);
   const bits = chrome.chips.map((chip) => chip.text);
-  const signature = `${lang}|${kind}|${meta.handle}|${chrome.protect?.text || ""}|${bits.join(",")}`;
+  const showReason = snapshot?.settings?.foldReasonEnabled !== false;
+  const summary = showReason
+    ? foldReasonSummary({
+        enabled: true,
+        reasons: extras.matched?.reasons || [],
+        aiLabel: extras.ai?.label || "",
+        tags: chrome.chips,
+      })
+    : null;
+  const reasonText = formatFoldReason(summary);
+  const open = !!extras.open;
+  const signature = `${lang}|${kind}|${meta.handle}|${chrome.protect?.text || ""}|${bits.join(",")}|${open ? 1 : 0}|${reasonText}`;
   if (node.dataset.sig === signature) return;
   node.dataset.sig = signature;
   node.replaceChildren();
-  const title = document.createElement("div");
+  const toggle = document.createElement("div");
+  toggle.className = "xsl-ph-toggle";
+  toggle.tabIndex = 0;
+  toggle.setAttribute("role", "button");
+  toggle.setAttribute("aria-expanded", open ? "true" : "false");
+  const title = document.createElement("span");
   title.className = "xsl-ph-title";
   title.textContent = kind === "comment" ? t("commentFolded", { handle: meta.handle }) : t("collapsed", { handle: meta.handle });
+  toggle.append(title);
   if (chrome.protect) {
     const badge = document.createElement("span");
     badge.className = "xsl-protect";
     badge.textContent = chrome.protect.text;
     badge.title = chrome.protect.title;
-    title.append(document.createTextNode(" "), badge);
+    toggle.append(badge);
   }
-  const detail = document.createElement("div");
-  detail.className = "xsl-ph-meta";
-  detail.textContent = kind === "comment" ? t("commentFoldMeta") : (bits.join(" · ") || t("hiddenOn"));
+  const reasonTitle = foldReasonTitle(summary);
+  if (reasonText) {
+    const reason = document.createElement("span");
+    reason.className = "xsl-ph-reason";
+    reason.textContent = reasonText;
+    if (reasonTitle) reason.title = reasonTitle;
+    toggle.append(reason);
+  }
+  const aside = reasonText && kind === "comment" ? t("commentFoldMeta") : "";
+  toggle.title = [open ? t("foldHide") : t("showOnce"), reasonTitle, aside].filter(Boolean).join(" · ");
+  toggle.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    stop(event);
+    foldToggle.get(node)?.();
+  });
+  let detail = null;
+  if (!reasonText) {
+    detail = document.createElement("div");
+    detail.className = "xsl-ph-meta";
+    detail.textContent = kind === "comment" ? t("commentFoldMeta") : (bits.join(" · ") || t("hiddenOn"));
+  }
   const show = document.createElement("button");
   show.type = "button";
-  show.textContent = t("showOnce");
+  show.textContent = open ? t("foldHide") : t("showOnce");
   show.addEventListener("click", (event) => {
     stop(event);
-    expanded.add(meta.key);
-    delete article.dataset.xslCollapsed;
-    node.remove();
+    foldToggle.get(node)?.();
   });
   const buttons = [show];
   if (kind === "comment") {
@@ -196,7 +285,7 @@ function placeholder(article, meta, record, kind, onSuspect) {
     suspect.title = t("commentSuspectTitle");
     suspect.addEventListener("click", (event) => {
       stop(event);
-      onSuspect?.();
+      extras.onSuspect?.();
     });
     buttons.push(suspect);
   } else {
@@ -211,7 +300,7 @@ function placeholder(article, meta, record, kind, onSuspect) {
     buttons.push(unhide);
   }
   for (const button of buttons) button.addEventListener("pointerdown", stop);
-  node.append(title, detail, ...buttons);
+  node.append(toggle, ...(detail ? [detail] : []), ...buttons);
 }
 
 function followOf(meta, record) {
@@ -233,19 +322,32 @@ function commentDecision(meta, matched) {
   });
 }
 
-function syncHidden(article, meta, matched) {
+function syncHidden(article, meta, matched, ai) {
   const record = indexOf(meta.userId);
   const accountHide = !!(record && record.hidden);
   const decision = commentDecision(meta, matched);
   const replyFold = !accountHide && decision.fold;
-  const hide = (accountHide || replyFold) && !expanded.has(meta.key);
-  if (hide) {
-    article.dataset.xslCollapsed = "1";
-    placeholder(article, meta, record, replyFold ? "comment" : "account", () => confirmRule(article));
-  } else if (article.dataset.xslCollapsed) {
-    delete article.dataset.xslCollapsed;
+  const shouldFold = accountHide || replyFold;
+  if (!shouldFold) {
+    expanded.delete(meta.key);
+    if (article.dataset.xslCollapsed) delete article.dataset.xslCollapsed;
     article.querySelector(":scope > [data-xsl-placeholder]")?.remove();
+    return;
   }
+  const open = expanded.has(meta.key);
+  if (open) delete article.dataset.xslCollapsed;
+  else article.dataset.xslCollapsed = "1";
+  placeholder(article, meta, record, replyFold ? "comment" : "account", {
+    matched,
+    ai,
+    open,
+    onSuspect: () => confirmRule(article),
+    onToggle: () => {
+      if (expanded.has(meta.key)) expanded.delete(meta.key);
+      else expanded.add(meta.key);
+      syncHidden(article, meta, matched, ai);
+    },
+  });
 }
 
 function keywordScanOn(meta) {
@@ -803,7 +905,7 @@ function render(article, meta) {
   article.dataset.xslHandle = meta.handle.toLowerCase();
   article.dataset.xslUser = meta.userId;
   article.dataset.xslSurface = meta.surface || "";
-  syncHidden(article, meta, matched);
+  syncHidden(article, meta, matched, ai?.ok && ai.label ? ai : null);
   rememberFollow(meta);
 }
 
