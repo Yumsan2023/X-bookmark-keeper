@@ -3,7 +3,7 @@ import { matchesAccountFilter } from '@/shared/accounts'
 import type { Post, PostSource } from '@/shared/types'
 import { postSource } from '@/shared/types'
 import { postExcludedByAuthorMarks, postMatchesAuthorMarks } from '@/strike/lib/author-flags.js'
-import { NO_FOLDER, parseQuery, type AuthorMarkKind, type HasKind, type ParsedQuery, type SourceFilter, type StatusFilter } from './query-parser'
+import { NO_FOLDER, NO_TAG, parseQuery, type AuthorMarkKind, type HasKind, type ParsedQuery, type SourceFilter, type StatusFilter } from './query-parser'
 import { tokenize } from './tokenizer'
 
 export type SortKey = 'relevance' | 'saved_desc' | 'saved_asc' | 'created_desc' | 'created_asc' | 'likes_desc' | 'views_desc'
@@ -16,7 +16,13 @@ export interface Filters {
   /** NO_FOLDER 表示未归类 */
   folders?: string[]
   has?: HasKind[]
+  /** Every listed tag must be present (AND). Query `tag:` uses this too. */
   tags?: string[]
+  /**
+   * Checkbox filter: a post matches when it has at least one of these tags (OR).
+   * Combined with `tags` / query `tag:` by AND (must satisfy both).
+   */
+  anyTags?: string[]
   status?: StatusFilter | 'all'
   source?: SourceFilter | 'all'
   /** Owning bookmark accounts. `__unknown__` = bookmarks with no account stamp. */
@@ -89,6 +95,16 @@ function searchableText(p: Post): string {
     .toLowerCase()
 }
 
+/**
+ * Checkbox tag filter. Empty selection matches every post.
+ * Several checked tags are OR: the post needs any one of them.
+ */
+export function matchesCheckedTags(postTags: string[] | undefined, checked: string[] | undefined): boolean {
+  if (!checked?.length) return true
+  const have = new Set((postTags ?? []).map((t) => t.toLowerCase()))
+  return checked.some((t) => have.has(t.trim().replace(/^#/, '').toLowerCase()))
+}
+
 export function matchesFilters(p: Post, q: ParsedQuery, f: Filters = {}): boolean {
   if (q.from.length && !q.from.includes(p.screen_name.toLowerCase())) return false
   if (f.authors?.length && !f.authors.some((a) => a.replace(/^@/, '').toLowerCase() === p.screen_name.toLowerCase())) return false
@@ -102,7 +118,13 @@ export function matchesFilters(p: Post, q: ParsedQuery, f: Filters = {}): boolea
     k === 'image' ? !!p.has_image : k === 'video' ? !!p.has_video : k === 'link' ? !!p.has_link : k === 'quote' ? !!p.has_quote : !!(p.has_image || p.has_video)
   for (const k of [...q.has, ...(f.has ?? [])]) if (!hasOk(k)) return false
   const tags = (p.tags ?? []).map((t) => t.toLowerCase())
-  for (const t of [...q.tags, ...(f.tags ?? [])]) if (!tags.includes(t.toLowerCase())) return false
+  const required = [...q.tags, ...(f.tags ?? [])]
+  if (required.includes(NO_TAG) && tags.length > 0) return false
+  for (const t of required) {
+    if (t === NO_TAG) continue
+    if (!tags.includes(t.toLowerCase())) return false
+  }
+  if (!matchesCheckedTags(p.tags, f.anyTags)) return false
   const status = q.status ?? (f.status && f.status !== 'all' ? f.status : undefined)
   if (status && p.status !== status) return false
   const src = q.source ?? (f.source && f.source !== 'all' ? f.source : undefined)

@@ -5,8 +5,10 @@ import { useT } from '../i18n'
 
 export function TagEditor({ post, allTags, onClose, onChanged }: { post: Post; allTags: string[]; onClose: () => void; onChanged: () => void }) {
   const t = useT()
-  const [tags, setTags] = useState(post.tags)
+  const [tags, setTags] = useState(post.tags ?? [])
   const [val, setVal] = useState('')
+  const [editing, setEditing] = useState<string | null>(null)
+  const [editVal, setEditVal] = useState('')
   const add = async () => {
     const parts = val.split(/[\s,，]+/).map(normalizeTag).filter(Boolean)
     if (!parts.length) return
@@ -20,17 +22,46 @@ export function TagEditor({ post, allTags, onClose, onChanged }: { post: Post; a
     setTags((cur) => cur.filter((x) => x !== tg))
     onChanged()
   }
+  const rename = async (from: string) => {
+    const to = normalizeTag(editVal)
+    setEditing(null)
+    if (!to || to.toLowerCase() === from.toLowerCase()) return
+    await removeTags([post.tweet_id], [from])
+    await addTags([post.tweet_id], [to])
+    setTags((cur) => [...new Set(cur.map((x) => (x === from ? to : x)))])
+    onChanged()
+  }
   return (
     <div className="modal-bg" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <p><b>{t('tag')}</b> — @{post.screen_name}</p>
+        <p><b>{t('edit_tags')}</b> — @{post.screen_name}</p>
+        <p className="muted small">{t('edit_tags_hint')}</p>
         <div className="tags">
           {tags.map((tg) => (
-            <span key={tg} className="tag">#{tg} <button className="x" onClick={() => rm(tg)}>×</button></span>
+            <span key={tg} className="tag">
+              {editing === tg ? (
+                <input
+                  className="tag-rename"
+                  value={editVal}
+                  autoFocus
+                  onChange={(e) => setEditVal(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void rename(tg)
+                    if (e.key === 'Escape') setEditing(null)
+                  }}
+                />
+              ) : (
+                <>#{tg}</>
+              )}
+              {editing !== tg && (
+                <button type="button" className="x" title={t('rename')} onClick={() => { setEditing(tg); setEditVal(tg) }}>✎</button>
+              )}
+              <button type="button" className="x" title={editing === tg ? t('save') : t('remove_tag')} onClick={() => void (editing === tg ? rename(tg) : rm(tg))}>{editing === tg ? '✓' : '×'}</button>
+            </span>
           ))}
         </div>
         <div className="row">
-          <input list="all-tags" value={val} autoFocus onChange={(e) => setVal(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && add()} placeholder={t('tag_prompt')} />
+          <input list="all-tags" value={val} autoFocus={editing == null} onChange={(e) => setVal(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && add()} placeholder={t('tag_prompt')} />
           <datalist id="all-tags">{allTags.map((x) => <option key={x} value={x} />)}</datalist>
           <button className="primary" onClick={add}>+</button>
         </div>

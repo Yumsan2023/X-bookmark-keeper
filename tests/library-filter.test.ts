@@ -30,4 +30,11 @@ describe('library filterStateToSearch', () => {
     expect(filters.status).toBe('active')
     expect(filters.source).toBe('bookmark')
   })
+
+  it('maps checked tags to OR anyTags and leaves them off the AND tag list', () => {
+    const { filters } = filterStateToSearch({ ...EMPTY_FILTER, tags: ['人工智能', 'Rust'] })
+    expect(filters.anyTags).toEqual(['人工智能', 'Rust'])
+    expect(filters.tags).toBeUndefined()
+    expect(filterStateToSearch(EMPTY_FILTER).filters.anyTags).toBeUndefined()
+  })
 })

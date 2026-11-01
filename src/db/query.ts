@@ -4,7 +4,7 @@
 import type { Collection } from 'dexie'
 import { UNKNOWN_ACCOUNT, normalizeHandle } from '@/shared/accounts'
 import type { Post, PostStatus } from '@/shared/types'
-import { NO_FOLDER, type HasKind, type ParsedQuery } from '@/search/query-parser'
+import { NO_FOLDER, NO_TAG, type HasKind, type ParsedQuery } from '@/search/query-parser'
 import type { Filters, SortKey } from '@/search/engine'
 import { matchesFilters } from '@/search/engine'
 import { db } from './db'
@@ -46,8 +46,11 @@ function comparator(sort: SortKey): (a: Post, b: Post) => number {
 
 /** 尝试用最有选择性的索引开局 */
 function indexedCollection(parsed: ParsedQuery, filters: Filters): Collection<Post, string> | null {
-  const tags = [...parsed.tags, ...(filters.tags ?? [])]
-  if (tags.length === 1) return db.posts.where('tags').equals(tags[0])
+  const tags = [...parsed.tags, ...(filters.tags ?? [])].filter((t) => t !== NO_TAG)
+  const anyTags = filters.anyTags ?? []
+  // 单个标签才能走 multiEntry 索引。多个复选标签是 OR, 不能用「等于某一个」开局。
+  if (tags.length === 1 && anyTags.length === 0 && !parsed.tags.includes(NO_TAG)) return db.posts.where('tags').equals(tags[0])
+  if (tags.length === 0 && anyTags.length === 1 && !parsed.tags.includes(NO_TAG)) return db.posts.where('tags').equals(anyTags[0])
 
   const folders = [...parsed.folders, ...(filters.folders ?? [])]
   if (folders.length === 1 && folders[0] !== NO_FOLDER) return db.posts.where('folder').equals(folders[0])
@@ -122,6 +125,7 @@ export async function pagePostsNoText(opts: PageOpts): Promise<PageResult> {
       (filters.folders?.length ?? 0) +
       (filters.has?.length ?? 0) +
       (filters.tags?.length ?? 0) +
+      (filters.anyTags?.length ?? 0) +
       (filters.status && filters.status !== 'all' ? 1 : 0) +
       (filters.since != null || filters.until != null ? 1 : 0) +
       (filters.accounts?.length ?? 0) +

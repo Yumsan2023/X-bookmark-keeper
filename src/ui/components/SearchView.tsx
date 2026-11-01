@@ -10,6 +10,7 @@ import { commitAuthorFlags, type AuthorFlagName } from '../author-flags'
 import { bg, useAuthorMarks, type Library } from '../hooks'
 import { useT, type Key } from '../i18n'
 import { downloadMedia, exportPosts, exportPostsBatched, openPrint, type ExportKind } from '../util'
+import { TagCheckboxList } from './library/FilterPanel'
 import { AiDialog } from './AiDialog'
 import { useDialogs } from './Dialogs'
 import { PostCard } from './PostCard'
@@ -34,7 +35,7 @@ export function SearchView({ lib, settings, compact, preset }: { lib: Library; s
   const [until, setUntil] = useState('')
   const [folder, setFolder] = useState('')
   const [has, setHas] = useState<Set<'image' | 'video' | 'link' | 'quote'>>(new Set())
-  const [tag, setTag] = useState('')
+  const [checkedTags, setCheckedTags] = useState<string[]>([])
   const [status, setStatus] = useState<Filters['status']>('all')
   const [source, setSource] = useState<Filters['source']>('all')
   const [sort, setSort] = useState<SortKey>('relevance')
@@ -44,7 +45,7 @@ export function SearchView({ lib, settings, compact, preset }: { lib: Library; s
   const [selectedCache, setSelectedCache] = useState<Map<string, Post>>(new Map())
   const [tagEdit, setTagEdit] = useState<Post | null>(null)
   const [noteEdit, setNoteEdit] = useState<Post | null>(null)
-  const [aiOpen, setAiOpen] = useState<'selected' | 'unfiled' | null>(null)
+  const [aiOpen, setAiOpen] = useState<'selected' | 'untagged' | null>(null)
   const [aiPosts, setAiPosts] = useState<Post[]>([])
   const [info, setInfo] = useState('')
   const [hits, setHits] = useState<Hit[]>([])
@@ -63,7 +64,7 @@ export function SearchView({ lib, settings, compact, preset }: { lib: Library; s
     const h = setTimeout(() => setDebounced(query), 180)
     return () => clearTimeout(h)
   }, [query])
-  useEffect(() => setPage(0), [debounced, authors, since, until, folder, has, tag, status, source, sort])
+  useEffect(() => setPage(0), [debounced, authors, since, until, folder, has, checkedTags, status, source, sort])
   useEffect(() => setBatchSize(settings.exportBatchSize || 1000), [settings.exportBatchSize])
 
   const authorMarks = useAuthorMarks()
@@ -74,12 +75,12 @@ export function SearchView({ lib, settings, compact, preset }: { lib: Library; s
       until: until ? new Date(until + 'T23:59:59.999').getTime() : undefined,
       folders: folder ? [folder] : undefined,
       has: [...has],
-      tags: tag ? [tag] : undefined,
+      anyTags: checkedTags.length ? checkedTags : undefined,
       status,
       source,
       authorMarkLookup: authorMarks.lookup,
     }),
-    [authors, since, until, folder, has, tag, status, source, authorMarks.lookup],
+    [authors, since, until, folder, has, checkedTags, status, source, authorMarks.lookup],
   )
 
   useEffect(() => {
@@ -215,13 +216,13 @@ export function SearchView({ lib, settings, compact, preset }: { lib: Library; s
       return n
     })
 
-  const openAi = async (scope: 'selected' | 'unfiled') => {
+  const openAi = async (scope: 'selected' | 'untagged') => {
     if (scope === 'selected') {
       setAiPosts(selectedPosts())
     } else {
-      // 未归类: 用过滤分页收集, 避免全表
-      const posts = await collectAllMatching(lib.engine, { query: 'folder:none is:active', filters: { status: 'active' }, sort: 'saved_desc' })
-      setAiPosts(posts.filter((p) => !p.folder && p.status === 'active'))
+      flash(t('ai_loading_untagged'))
+      const posts = await collectAllMatching(lib.engine, { query: 'tag:none', sort: 'saved_desc' })
+      setAiPosts(posts.filter((p) => !(p.tags?.length)))
     }
     setAiOpen(scope)
   }
@@ -235,6 +236,7 @@ export function SearchView({ lib, settings, compact, preset }: { lib: Library; s
           {SORTS.map((s) => <option key={s} value={s}>{t(`sort_${s}` as Key)}</option>)}
         </select>
       </div>
+      <TagCheckboxList tags={lib.tags} checked={checkedTags} onChange={setCheckedTags} />
       {warnings.length > 0 && <div className="warn-line">⚠ {warnings.join(', ')}</div>}
       {lib.indexing && (
         <div className="info">{t('index_building')} {lib.indexProgress ?? 0}%</div>
@@ -250,12 +252,6 @@ export function SearchView({ lib, settings, compact, preset }: { lib: Library; s
               <option value="">{t('all')}</option>
               <option value={NO_FOLDER}>{t('unfiled')}</option>
               {lib.folders.map((f) => <option key={f.name} value={f.name}>{f.name} ({f.count})</option>)}
-            </select>
-          </label>
-          <label>{t('tag')}
-            <select value={tag} onChange={(e) => setTag(e.target.value)}>
-              <option value="">{t('all')}</option>
-              {lib.tags.map((x) => <option key={x.tag} value={x.tag}>#{x.tag} ({x.count})</option>)}
             </select>
           </label>
           <label>{t('status')}
@@ -336,8 +332,8 @@ export function SearchView({ lib, settings, compact, preset }: { lib: Library; s
           <button className="danger" onClick={onRemoveLocal}>{t('delete')}</button>
         </div>
       )}
-      {aiVisible && selected.size === 0 && lib.unfiledCount > 0 && (
-        <div className="toolbar"><button onClick={() => void openAi('unfiled')}>✨ {t('ai_classify')} ({t('ai_scope_unfiled')})</button></div>
+      {aiVisible && selected.size === 0 && (
+        <div className="toolbar"><button onClick={() => void openAi('untagged')}>✨ {t('ai_classify')} ({t('ai_scope_untagged')})</button></div>
       )}
       {info && <div className="info">{info}</div>}
 
@@ -385,8 +381,8 @@ export function SearchView({ lib, settings, compact, preset }: { lib: Library; s
         <AiDialog
           settings={settings}
           posts={aiPosts}
-          scopeLabel={aiOpen === 'selected' ? t('ai_scope_selected') : t('ai_scope_unfiled')}
-          folders={lib.folders}
+          scopeLabel={aiOpen === 'selected' ? t('ai_scope_selected') : t('ai_scope_untagged')}
+          knownTags={allTagNames}
           onClose={() => setAiOpen(null)}
           onApplied={afterChange}
         />

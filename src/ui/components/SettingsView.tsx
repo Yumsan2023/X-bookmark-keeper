@@ -24,7 +24,7 @@ export function SettingsView({ settings, save, lib, onNotify }: { settings: Sett
 
   const doSave = async () => {
     // 申请 LLM 接口域名的可选权限 (需用户手势, 此处在点击回调中)
-    if (s.llm.apiKey.trim() && s.llm.endpoint.trim()) {
+    if (s.llm.endpoint.trim()) {
       try {
         const origin = new URL(s.llm.endpoint).origin + '/*'
         if (!(await chrome.permissions.contains({ origins: [origin] }))) await chrome.permissions.request({ origins: [origin] })
@@ -84,8 +84,8 @@ export function SettingsView({ settings, save, lib, onNotify }: { settings: Sett
 
       <h3>{t('llm')}</h3>
       <p className="muted">{t('llm_hint')}</p>
-      <label>{t('endpoint')}<input value={s.llm.endpoint} onChange={(e) => upLlm({ endpoint: e.target.value })} /></label>
-      <label>{t('api_key')}<input type="password" autoComplete="off" value={s.llm.apiKey} onChange={(e) => upLlm({ apiKey: e.target.value })} /></label>
+      <label>{t('endpoint')}<input value={s.llm.endpoint} placeholder="http://127.0.0.1:11434/v1" onChange={(e) => upLlm({ endpoint: e.target.value })} /></label>
+      <label>{t('api_key')}<input type="password" autoComplete="off" value={s.llm.apiKey} placeholder={t('api_key_optional')} onChange={(e) => upLlm({ apiKey: e.target.value })} /></label>
       <label>{t('model')}
         <select
           value={modelCustom ? LLM_MODEL_CUSTOM : s.llm.model}
@@ -110,7 +110,7 @@ export function SettingsView({ settings, save, lib, onNotify }: { settings: Sett
           <input
             value={s.llm.model}
             onChange={(e) => upLlm({ model: e.target.value })}
-            placeholder="gpt-4o-mini"
+            placeholder="qwen2.5:7b"
           />
         </label>
       )}
@@ -118,7 +118,7 @@ export function SettingsView({ settings, save, lib, onNotify }: { settings: Sett
         <label>{t('batch_size')}<input type="number" min={1} max={100} value={s.llm.batchSize} onChange={(e) => upLlm({ batchSize: num(e.target.value, 20) })} /></label>
         <label>{t('interval_ms')}<input type="number" min={0} step={500} value={s.llm.intervalMs} onChange={(e) => upLlm({ intervalMs: num(e.target.value, 2000) })} /></label>
       </div>
-      <label className="check"><input type="checkbox" checked={s.llm.allowNewFolders} onChange={(e) => upLlm({ allowNewFolders: e.target.checked })} /> {t('allow_new_folders')}</label>
+      <label className="check"><input type="checkbox" checked={s.llm.allowNewTags !== false} onChange={(e) => upLlm({ allowNewTags: e.target.checked })} /> {t('allow_new_tags')}</label>
       <div className="row"><button className="primary" onClick={doSave}>{t('save')}</button>{msg && <span className="ok">{msg}</span>}</div>
 
       <h3>{t('data')}</h3>

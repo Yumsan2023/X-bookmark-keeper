@@ -4,7 +4,8 @@
  *   from:name   since:2024-01-01   until:2024-12-31
  *   folder:名称 / folder:"My Folder" / folder:none
  *   has:image|video|link|quote|media
- *   tag:xxx     is:deleted|unbookmarked|active
+ *   tag:xxx     tag:none|untagged|无   (多个 tag: 为 AND)
+ *   is:deleted|unbookmarked|active
  *   source:bookmark|timeline
  *   author:marketing|spam|常营销|常垃圾   strike:spam|marketing|any
  *   -author:marketing 排除该芯片
@@ -35,6 +36,8 @@ export interface ParsedQuery {
 }
 
 export const NO_FOLDER = '__none__'
+/** Query token for posts that have no content tags (`tag:none`). */
+export const NO_TAG = '__notag__'
 
 /** 按空白切分, 但保留引号内的内容 (含 key:"a b" 形式) */
 export function splitTokens(input: string): string[] {
@@ -145,7 +148,7 @@ export function parseQuery(input: string): ParsedQuery {
           break
         }
         case 'tag':
-          q.tags.push(val.replace(/^#/, ''))
+          q.tags.push(/^(none|untagged|empty|无|无标签)$/i.test(val) ? NO_TAG : val.replace(/^#/, ''))
           break
         case 'is': {
           const v = val.toLowerCase()
