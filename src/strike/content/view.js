@@ -390,7 +390,7 @@ export function openChoice(shadow, model) {
       }) : null,
       el("button", { type: "button", text: model.cancel, onClick: () => finish(null) }),
       model.neutral ? el("button", { type: "button", text: model.neutral, onClick: () => finish({ confirm: false }) }) : null,
-      el("button", {
+      model.confirm ? el("button", {
         class: "primary",
         type: "button",
         text: model.confirm,
@@ -399,7 +399,7 @@ export function openChoice(shadow, model) {
           for (const [id, input] of Object.entries(inputs)) checks[id] = input.checked && !input.disabled;
           finish({ confirm: true, checks });
         },
-      }),
+      }) : null,
     ]));
   });
 }

@@ -1,6 +1,6 @@
 import { send } from "../lib/client.js";
 import { loadDict, translate } from "../lib/i18n.js";
-import { packsToText, parseKeywordPackText, resolveLang, shortcutFromEvent, tagLabel } from "../lib/pure.js";
+import { allowedCommunityUrl, communityPermissionOrigin, packsToText, parseKeywordPackText, resolveLang, shortcutFromEvent, tagLabel } from "../lib/pure.js";
 
 /** Mount the strike options UI inside a shadow root (or any parent). */
 export async function mountStrikeOptions(root) {
@@ -75,6 +75,10 @@ export async function mountStrikeOptions(root) {
     }
     $("#commentScanEnabled").checked = !!draft.commentScanEnabled;
     $("#foldReasonEnabled").checked = draft.foldReasonEnabled !== false;
+    $("#communityListsEnabled").checked = draft.communityListsEnabled === true;
+    const communityMode = draft.communityListMode === "fold" ? "fold" : "yellow";
+    const communityModeInput = root.querySelector(`input[name="communityListMode"][value="${communityMode}"]`);
+    if (communityModeInput) communityModeInput.checked = true;
     const commentMode = draft.commentHitMode === "prompt" ? "prompt" : "fold";
     const commentModeInput = root.querySelector(`input[name="commentHitMode"][value="${commentMode}"]`);
     if (commentModeInput) commentModeInput.checked = true;
@@ -96,6 +100,7 @@ export async function mountStrikeOptions(root) {
     renderPacks();
     renderVetoes();
     renderHitLog();
+    renderCommunityLists();
   }
 
   function renderThresholds() {
@@ -447,6 +452,104 @@ export async function mountStrikeOptions(root) {
     }
   }
 
+  function communityModeNow() {
+    return root.querySelector('input[name="communityListMode"]:checked')?.value === "fold" ? "fold" : "yellow";
+  }
+
+  function communityErrorText(error) {
+    const code = String(error || "");
+    if (!code) return "";
+    if (code.startsWith("http-")) return t("communityHttp", { status: code.slice(5) });
+    return t(code);
+  }
+
+  async function reloadKeepCommunityToggles() {
+    const enabled = $("#communityListsEnabled").checked;
+    const mode = communityModeNow();
+    await reload();
+    draft.communityListsEnabled = enabled;
+    draft.communityListMode = mode;
+    $("#communityListsEnabled").checked = enabled;
+    const input = root.querySelector(`input[name="communityListMode"][value="${mode}"]`);
+    if (input) input.checked = true;
+  }
+
+  function renderCommunityLists() {
+    const box = $("#community-lists");
+    box.replaceChildren();
+    const lists = Array.isArray(draft.communityLists) ? draft.communityLists : [];
+    if (!lists.length) {
+      const empty = document.createElement("p");
+      empty.className = "quiet";
+      empty.textContent = t("communityEmpty");
+      box.append(empty);
+      return;
+    }
+    for (const list of lists) {
+      const card = document.createElement("article");
+      card.className = "pack";
+      const title = document.createElement("div");
+      title.className = "handle";
+      title.textContent = list.name || t("communityChip");
+      const enabled = document.createElement("label");
+      enabled.className = "inline";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = list.enabled !== false;
+      checkbox.addEventListener("change", async () => {
+        const result = await send({ type: "SET_COMMUNITY_LIST", id: list.id, enabled: checkbox.checked });
+        note(result?.ok ? t("saved") : t(result?.error || "error"), result?.ok ? "ok" : "bad");
+        if (result?.ok) await reloadKeepCommunityToggles();
+      });
+      enabled.append(checkbox, document.createTextNode(` ${t("packEnabled")}`));
+      const meta = document.createElement("p");
+      meta.className = "meta";
+      const where = list.url ? list.url : t("communityLocal");
+      const counts = t("communityCounts", { handles: list.handles?.length || 0, keywords: list.keywords?.length || 0 });
+      const when = list.fetchedAt ? t("communityFetched", { when: new Date(list.fetchedAt).toLocaleString() }) : "";
+      meta.textContent = [where, counts, when].filter(Boolean).join(" · ");
+      card.append(title, enabled, meta);
+      if (list.error) {
+        const err = document.createElement("p");
+        err.className = "queue-error";
+        err.textContent = `${communityErrorText(list.error)} · ${t("communityCached")}`;
+        card.append(err);
+      }
+      const controls = document.createElement("div");
+      controls.className = "row";
+      if (list.url) {
+        controls.append(button(t("communityRefresh"), async () => {
+          const origin = communityPermissionOrigin(list.url);
+          if (origin) {
+            try {
+              const granted = await chrome.permissions.request({ origins: [origin] });
+              if (!granted) {
+                note(t("grantDenied"), "bad");
+                return;
+              }
+            } catch {
+              note(t("grantDenied"), "bad");
+              return;
+            }
+          }
+          const result = await send({ type: "REFRESH_COMMUNITY", id: list.id });
+          if (!result?.ok) note(result?.kept ? t("communityKept") : communityErrorText(result?.error), "bad");
+          else if (result.kept) note(t("communityKept"), "bad");
+          else note(t("saved"), "ok");
+          await reloadKeepCommunityToggles();
+        }));
+      }
+      controls.append(button(t("communityDelete"), async () => {
+        if (!window.confirm(t("communityDeleteConfirm", { name: list.name || "" }))) return;
+        const result = await send({ type: "REMOVE_COMMUNITY", id: list.id });
+        note(result?.ok ? t("saved") : t(result?.error || "error"), result?.ok ? "ok" : "bad");
+        if (result?.ok) await reloadKeepCommunityToggles();
+      }, "danger"));
+      card.append(controls);
+      box.append(card);
+    }
+  }
+
   function renderLog() {
     const root = $("#log");
     root.replaceChildren();
@@ -475,6 +578,8 @@ export async function mountStrikeOptions(root) {
     }
     draft.commentScanEnabled = $("#commentScanEnabled").checked;
     draft.foldReasonEnabled = $("#foldReasonEnabled").checked;
+    draft.communityListsEnabled = $("#communityListsEnabled").checked;
+    draft.communityListMode = root.querySelector('input[name="communityListMode"]:checked')?.value === "fold" ? "fold" : "yellow";
     draft.commentHitMode = root.querySelector('input[name="commentHitMode"]:checked')?.value === "prompt" ? "prompt" : "fold";
     draft.libraryChipThreshold = Number($("#libraryChipThreshold").value);
     draft.vetoCooldownDays = Number($("#vetoCooldownDays").value);
@@ -564,6 +669,7 @@ export async function mountStrikeOptions(root) {
     renderLog();
     renderHitLog();
     renderVetoes();
+    renderCommunityLists();
   });
 
   $("#query").addEventListener("input", () => renderLedger());
@@ -647,6 +753,50 @@ export async function mountStrikeOptions(root) {
     if (!file) return;
     if (file.size > 100_000) return note(t("too-large"), "bad");
     applyPackText(await file.text());
+  });
+  async function importCommunityText(text) {
+    const result = await send({ type: "IMPORT_COMMUNITY", text });
+    if (!result?.ok) {
+      note(communityErrorText(result?.error) || t("error"), "bad");
+      return;
+    }
+    const imported = t("communityImported", { name: result.list?.name || "" });
+    const warnings = result.warnings || [];
+    note(warnings.length ? `${imported} ${warnings.join(" ")}` : imported, warnings.length ? "bad" : "ok");
+    $("#community-text").value = "";
+    await reloadKeepCommunityToggles();
+  }
+  $("#community-import").addEventListener("click", () => importCommunityText($("#community-text").value));
+  $("#community-file").addEventListener("change", async () => {
+    const file = $("#community-file").files?.[0];
+    $("#community-file").value = "";
+    if (!file) return;
+    if (file.size > 512_000) return note(t("too-large"), "bad");
+    await importCommunityText(await file.text());
+  });
+  $("#community-subscribe").addEventListener("click", async () => {
+    const url = $("#community-url").value.trim();
+    if (!allowedCommunityUrl(url)) return note(t("bad-url"), "bad");
+    const origin = communityPermissionOrigin(url);
+    try {
+      const granted = await chrome.permissions.request({ origins: [origin] });
+      if (!granted) return note(t("grantDenied"), "bad");
+    } catch {
+      return note(t("grantDenied"), "bad");
+    }
+    const result = await send({ type: "SUBSCRIBE_COMMUNITY", url });
+    if (!result?.ok) {
+      note(`${t("communityFetchNew")} ${communityErrorText(result?.error)}`.trim(), "bad");
+      return;
+    }
+    if (result.kept) note(t("communityKept"), "bad");
+    else {
+      const subscribed = t("communitySubscribed", { name: result.list?.name || "" });
+      const warnings = result.warnings || [];
+      note(warnings.length ? `${subscribed} ${warnings.join(" ")}` : subscribed, warnings.length ? "bad" : "ok");
+      $("#community-url").value = "";
+    }
+    await reloadKeepCommunityToggles();
   });
   $("#clear-hits").addEventListener("click", async () => {
     const result = await send({ type: "CLEAR_HIT_LOG" });

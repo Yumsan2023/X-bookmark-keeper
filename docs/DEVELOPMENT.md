@@ -90,6 +90,7 @@ x-toolkit/   # 仓库路径不变；包名 x-toolkit
 | 同步策略 / 限流 | `background/sync-engine.ts`、`timeline-engine.ts`、`api/client.ts` |
 | 搜索语法 | `search/query-parser.ts` |
 | 作者常营销 / 常垃圾 | `strike/lib/author-flags.js`、`strike/lib/pure.js` 的 `setAuthorFlag`、书签 `AuthorMarks.tsx` |
+| 社区名单（黄标 / 折叠，不记账） | `strike/lib/pure.js` 的 `parseCommunityList` / `matchCommunityLists` / `communityListDecision`，选项页社区名单一节，内容脚本黄标 |
 | 导出格式 | `export/*` |
 | UI 文案 | `ui/i18n.tsx` |
 | 权限 / 主机 | `public/manifest.json` |

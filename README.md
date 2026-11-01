@@ -1,6 +1,6 @@
 # X Toolkit — X (Twitter) 书签管家 + 打击账本 (Chrome MV3 扩展)
 
-**当前版本: 0.7.9** — 一个扩展同时包含书签库与打击账本 / Strike Ledger。本产品此前名为 Bookmark Keeper；本地书签库 IndexedDB 名仍是 `bookmark-keeper`，旧库可直接升级。0.7.1 给打击账本加上静音/屏蔽队列和限流面板。0.7.2 可以编辑关键词包（含文本导入导出），并从帖子把选中的词加进词库；命中只出黄标，不自动记一笔。0.7.3 在可选 BYOK 建议为垃圾或营销时，经你确认后把抽出的短词写入一个词库；仍然不自动记一笔。0.7.4 在时间线上用保护徽章和标签芯片标出已关注/白名单账号，以及已有的打击次数；点芯片只打开标记，不会自动静音或屏蔽。0.7.5 把「已关注」改成软保护：关键词和黄标仍不会自动入队，但你手动把某个标签记满自己设的阈值后，仍按自动/确认/仅提示静音或屏蔽；白名单仍是硬保护，不会自动入队。0.7.6 把作者级「常营销 / 常垃圾」标到同一份打击账本上，书签库给这个作者已有和以后同步的帖子显示芯片；默认不记一笔，也不静音或屏蔽。0.7.7 在推文详情的回复区单独扫描关键词：默认关闭；打开后默认折叠命中的那一条回复或只提示，不会因评论命中自动静音或屏蔽。0.7.8 在黄色「可疑」和 AI 建议里加上「不像」：本地停用命中的词，或按冷却天数暂时降低它的敏感度；也可以记下一条例外短语（仅该作者，或任何作者）。不会撤销已经确认的记一笔，也不会静音或屏蔽。0.7.9 在折叠条上写出原因：命中的词库词，或已有的「AI 建议垃圾 / 营销」说法。多条命中只留最主要的一条，其余收成 +N。点折叠条展开原文，再点收起。时间线本地折叠和评论区折叠都有这条。选项里可以关掉「折叠条显示原因」，默认开。不改记账阈值、静音/屏蔽、白名单、已关注和误判。
+**当前版本: 0.7.10** — 一个扩展同时包含书签库与打击账本 / Strike Ledger。本产品此前名为 Bookmark Keeper；本地书签库 IndexedDB 名仍是 `bookmark-keeper`，旧库可直接升级。0.7.1 给打击账本加上静音/屏蔽队列和限流面板。0.7.2 可以编辑关键词包（含文本导入导出），并从帖子把选中的词加进词库；命中只出黄标，不自动记一笔。0.7.3 在可选 BYOK 建议为垃圾或营销时，经你确认后把抽出的短词写入一个词库；仍然不自动记一笔。0.7.4 在时间线上用保护徽章和标签芯片标出已关注/白名单账号，以及已有的打击次数；点芯片只打开标记，不会自动静音或屏蔽。0.7.5 把「已关注」改成软保护：关键词和黄标仍不会自动入队，但你手动把某个标签记满自己设的阈值后，仍按自动/确认/仅提示静音或屏蔽；白名单仍是硬保护，不会自动入队。0.7.6 把作者级「常营销 / 常垃圾」标到同一份打击账本上，书签库给这个作者已有和以后同步的帖子显示芯片；默认不记一笔，也不静音或屏蔽。0.7.7 在推文详情的回复区单独扫描关键词：默认关闭；打开后默认折叠命中的那一条回复或只提示，不会因评论命中自动静音或屏蔽。0.7.8 在黄色「可疑」和 AI 建议里加上「不像」：本地停用命中的词，或按冷却天数暂时降低它的敏感度；也可以记下一条例外短语（仅该作者，或任何作者）。不会撤销已经确认的记一笔，也不会静音或屏蔽。0.7.9 在折叠条上写出原因：命中的词库词，或已有的「AI 建议垃圾 / 营销」说法。多条命中只留最主要的一条，其余收成 +N。点折叠条展开原文，再点收起。时间线本地折叠和评论区折叠都有这条。选项里可以关掉「折叠条显示原因」，默认开。不改记账阈值、静音/屏蔽、白名单、已关注和误判。0.7.10 增加可选社区名单：导入或订阅一份本地 JSON（或一行一条的文本）后，需要自己打开开关。命中只出黄色「可疑」，或按现有折叠策略折叠，折叠条可写成「社区名单 · 名称」。不记 strike，不入静音/屏蔽队列，点黄标也不记账。白名单仍不折叠，已关注仍不折叠。订阅失败时用上次缓存。不走 GraphQL 拉黑，也不把账本同步到云端。
 
 在 x.com 时间线上标记垃圾/营销的账本与书签同步共用一个工具栏图标。请卸载单独安装的 X Strike Ledger，否则两个内容脚本会同时注入。
 
@@ -11,7 +11,7 @@
 <details>
 <summary><strong>English summary</strong></summary>
 
-Chrome MV3 extension **X Toolkit**. It syncs X **bookmarks** and optional public **UserTweets** into local IndexedDB, and adds a local **Strike Ledger**: mark Spam / Marketing on the x.com timeline, then hide locally or (only if you turn it on) mute/block through X’s own menu. v0.7.1 queues mute/block (jitter of about 1s+, a daily cap, backoff, pause/resume). v0.7.2 adds editable keyword packs (including plain-text import/export) and **Add selection to keyword pack** from a tweet’s Mark menu or the right-click menu. A keyword hit still only shows the yellow Suspect chip and never adds a strike. v0.7.3 can distill one BYOK spam/marketing suggestion into short keyword rules after you confirm; that save does not add a strike and does not call the model again. v0.7.4 paints a Protected badge on accounts you follow or whitelist, and compact tag chips such as Spam×2 beside the name and in the strike row. Clicking a chip opens Mark and does not enqueue mute or block. v0.7.5 makes following a soft protect: a keyword hit, the yellow Suspect chip, or an AI suggestion alone still does not auto-queue mute or block, and unknown follow state stays conservative. After you confirm enough strikes to reach your per-tag threshold, mute/block follows the same automatic / confirm / prompt-only mode as any other account. Whitelist stays a hard protect and is never auto-queued. v0.7.6 stores author-level marketing and spam flags on that same ledger (`xsl`, `ledger[userId].authorFlags`). The bookmark library reads them and shows a marketing-prone or spam-prone chip on existing and future posts. Marking an author from the library does not add a strike unless you turn that on, and it never queues mute or block. Search with `author:marketing` or `strike:spam`. The Mark sheet can still queue mute or block for someone you follow. The green badge stays **已关注保护** / **Protected**. v0.7.7 scans replies on a tweet detail page with the same keyword packs. Comment scanning is its own switch and is off by default. A hit paints the yellow Suspect chip and, by default, folds that one reply; you can switch it to prompt only. A comment hit never auto-queues mute or block. Whitelist is not folded. Accounts you follow are not auto-folded and are not auto-queued. Confirming the chip can add a strike. Mute and block still queue only from the Mark sheet, through X's own menu. v0.7.8 adds **Not spam** on the yellow Suspect chip and on an AI suggestion. It locally vetoes the matched keyword, or cools that rule down for the number of days you set (0 means until you undo it). During a cool-down the word alone does not paint the chip; it can still show if another rule that is not cooled down also matches. You can also save an exception phrase for that author or for any author. Confirmed strikes stay. Nothing is muted or blocked. Whitelist stays a hard protect and following stays a soft protect. The list of vetoes is local only. v0.7.9 writes the reason on the collapse bar: the matched keyword, or the existing “AI suggests Spam / Marketing” label. Several hits keep the main one and fold the rest into +N. Click the bar to read the post, and click again to collapse it. Timeline hides and folded replies both get the bar. “Show why on the collapse bar” is on by default. Strikes, mute, block, whitelist, following, and vetoes are unchanged. Storage keys stay `bk_*` and `xsl` / `xslSecret`. Unload a standalone Strike Ledger install so the page is not injected twice. Mute and block stay off until you enable them. **Not verified against real X accounts** in this repo; unit tests + Mock-X e2e only. May violate X ToS; use at your own risk. MIT License.
+Chrome MV3 extension **X Toolkit**. It syncs X **bookmarks** and optional public **UserTweets** into local IndexedDB, and adds a local **Strike Ledger**: mark Spam / Marketing on the x.com timeline, then hide locally or (only if you turn it on) mute/block through X’s own menu. v0.7.1 queues mute/block (jitter of about 1s+, a daily cap, backoff, pause/resume). v0.7.2 adds editable keyword packs (including plain-text import/export) and **Add selection to keyword pack** from a tweet’s Mark menu or the right-click menu. A keyword hit still only shows the yellow Suspect chip and never adds a strike. v0.7.3 can distill one BYOK spam/marketing suggestion into short keyword rules after you confirm; that save does not add a strike and does not call the model again. v0.7.4 paints a Protected badge on accounts you follow or whitelist, and compact tag chips such as Spam×2 beside the name and in the strike row. Clicking a chip opens Mark and does not enqueue mute or block. v0.7.5 makes following a soft protect: a keyword hit, the yellow Suspect chip, or an AI suggestion alone still does not auto-queue mute or block, and unknown follow state stays conservative. After you confirm enough strikes to reach your per-tag threshold, mute/block follows the same automatic / confirm / prompt-only mode as any other account. Whitelist stays a hard protect and is never auto-queued. v0.7.6 stores author-level marketing and spam flags on that same ledger (`xsl`, `ledger[userId].authorFlags`). The bookmark library reads them and shows a marketing-prone or spam-prone chip on existing and future posts. Marking an author from the library does not add a strike unless you turn that on, and it never queues mute or block. Search with `author:marketing` or `strike:spam`. The Mark sheet can still queue mute or block for someone you follow. The green badge stays **已关注保护** / **Protected**. v0.7.7 scans replies on a tweet detail page with the same keyword packs. Comment scanning is its own switch and is off by default. A hit paints the yellow Suspect chip and, by default, folds that one reply; you can switch it to prompt only. A comment hit never auto-queues mute or block. Whitelist is not folded. Accounts you follow are not auto-folded and are not auto-queued. Confirming the chip can add a strike. Mute and block still queue only from the Mark sheet, through X's own menu. v0.7.8 adds **Not spam** on the yellow Suspect chip and on an AI suggestion. It locally vetoes the matched keyword, or cools that rule down for the number of days you set (0 means until you undo it). During a cool-down the word alone does not paint the chip; it can still show if another rule that is not cooled down also matches. You can also save an exception phrase for that author or for any author. Confirmed strikes stay. Nothing is muted or blocked. Whitelist stays a hard protect and following stays a soft protect. The list of vetoes is local only. v0.7.9 writes the reason on the collapse bar: the matched keyword, or the existing “AI suggests Spam / Marketing” label. Several hits keep the main one and fold the rest into +N. Click the bar to read the post, and click again to collapse it. Timeline hides and folded replies both get the bar. “Show why on the collapse bar” is on by default. Strikes, mute, block, whitelist, following, and vetoes are unchanged. v0.7.10 adds an optional community list. Import or subscribe to a local JSON file (or one entry per line), then turn the switch on. A hit paints the yellow Suspect chip, or folds under the same protections; the bar can read “List · name”. It does not add a strike, does not enter the mute/block queue, and clicking the chip does not record one either. Whitelist is not folded. Accounts you follow are not folded. A failed refresh keeps the last cached copy. No GraphQL block, and the ledger is not synced to a cloud. Storage keys stay `bk_*` and `xsl` / `xslSecret`. Unload a standalone Strike Ledger install so the page is not injected twice. Mute and block stay off until you enable them. **Not verified against real X accounts** in this repo; unit tests + Mock-X e2e only. May violate X ToS; use at your own risk. MIT License.
 
 Step-by-step: [docs/USAGE.md](./docs/USAGE.md) · Develop: [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md) · Contribute: [CONTRIBUTING.md](./CONTRIBUTING.md)
 
@@ -79,6 +79,7 @@ Step-by-step: [docs/USAGE.md](./docs/USAGE.md) · Develop: [docs/DEVELOPMENT.md]
 | 评论区扫描（0.7.7）：推文详情页的回复单独开关。沿用关键词包和黄色「可疑」，可确认记一笔。默认关闭；打开后默认折叠这一条或只提示。评论命中不自动静音/屏蔽。白名单不折叠，已关注不自动折叠也不自动入队。排队仍走标记里的 X 菜单 | ✅ 纯逻辑单测；**真实详情页注入未验证** |
 | 误判反馈（0.7.8）：黄标或 AI 建议上点「不像 / Not spam」，本地停用命中的词，或按冷却天数降低敏感度；可选记下例外短语（仅该作者或任何作者）。不撤销已确认的记一笔，不静音、不屏蔽。设置里可查看并撤销。白名单仍是硬保护，已关注仍是软保护 | ✅ 纯逻辑单测；**真实时间线未验证** |
 | 折叠条原因（0.7.9）：时间线本地折叠和评论区折叠的条上写出命中的词，或已有的「AI 建议垃圾 / 营销」。多条只留最主要的一条，其余 +N。点条展开，再点收起。选项「折叠条显示原因」默认开。不改记账、静音/屏蔽、白名单、已关注、误判 | ✅ 纯逻辑单测；**真实时间线未验证** |
+| 社区名单（0.7.10）：可选。导入或订阅 JSON / 文本名单后自行打开。命中出黄色「可疑」，或按折叠策略折叠，条上可写「社区名单 · 名称」。不记 strike，不入静音/屏蔽队列，点黄标也不记账。白名单不折叠，已关注不折叠。订阅失败用上次缓存 | ✅ 纯逻辑单测；**真实时间线未验证** |
 
 ---
 
@@ -263,6 +264,44 @@ AI 建议默认关闭。密钥仍只在 `xslSecret`，不进词库，也不进�
 重新构建并加载 `dist/`（版本 0.7.9）。这条展示有单测；**没有**在真实 X 账号上验证过。
 
 发布包 `x-toolkit-0.7.9-chrome.zip` 的根目录就是可「加载已解压的扩展程序」的文件夹，内含 `manifest.json`（版本 0.7.9）。本地重新打包：`npm run build`，再把 `dist/` 里的文件（不要多套一层 `dist/` 目录）打成 zip。源码仓不提交这个 zip。
+
+### 可选社区名单（0.7.10）
+
+社区名单是可选的，默认关闭。它只影响黄色「可疑」和本地折叠，**不会**自动记一笔，**不会**进入静音/屏蔽队列，点黄标也**不**记账。不调用 X 的 GraphQL，也不把账本同步到云端。
+
+1. 重新构建并加载 `dist/`（版本 0.7.10）。选项页 **打击账本 → 社区名单**。
+2. 导入一份 JSON，或粘贴一行一条的文本，或填一个 https 名单地址再订阅。导入和订阅只写在本机，**不会**把「启用社区名单」打开。
+3. 勾选 **启用社区名单**。命中后默认 **仅黄标**。若改成 **可折叠**，会按现有折叠策略收起这条时间线帖子或回复：白名单不折叠，已关注不折叠，你正在看的那条主帖不折叠。关注状态未知时可以折叠，仍然不静音、不屏蔽、不记账。
+4. 点页面上的 **保存**。之后回到 x.com。命中时出现黄色 **可疑**。折叠条在「折叠条显示原因」打开时写成 `社区名单 · 示例名单`，多条收成 `+N`。点黄标只说明名单名称，可以点「不像」停用这次命中；没有「记一笔」。
+5. 订阅可以 **刷新** 或 **删除**。刷新失败时卡片上会写错误，并继续用上次成功拉到的缓存。每份名单大约可放 1500 个账号和 1500 个词，最多 6 份。
+6. 白名单仍是硬保护，已关注仍是软保护，误判 veto 仍然生效：已经停用的词，社区名单里的同一个词也不会再单独标黄。
+
+稳定格式是这份 JSON（`version` 目前为 1；匹配是原文包含，不是正则）：
+
+```json
+{
+  "format": "x-toolkit-community-list",
+  "version": 1,
+  "name": "示例名单",
+  "handles": ["spam_bot"],
+  "keywords": ["加群领资料", "日入"]
+}
+```
+
+同一份数据也可以写成文本，便于粘贴：
+
+```text
+# name: 示例名单
+@spam_bot
+加群领资料
+日入
+```
+
+`@` 开头是账号（精确匹配，不区分大小写）。其它非空行是词，出现在正文、简介或显示名里即命中。`#` 开头是注释，`# name:` 写名单名称。也接受 JSON 字符串数组：`@` 开头是账号，其余是词。URL 要返回上面任一种内容，并且是 https（本机可以用 `http://localhost` 或 `http://127.0.0.1`）。
+
+重新构建并加载 `dist/`（版本 0.7.10）。这条逻辑有单测；**没有**在真实 X 账号上验证过。
+
+发布包 `x-toolkit-0.7.10-chrome.zip` 的根目录就是可「加载已解压的扩展程序」的文件夹，内含 `manifest.json`（版本 0.7.10）。源码仓不提交这个 zip。
 
 ---
 
