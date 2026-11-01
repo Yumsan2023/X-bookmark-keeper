@@ -74,6 +74,7 @@ export async function mountStrikeOptions(root) {
       $(`#${id}`).checked = !!draft[id];
     }
     $("#commentScanEnabled").checked = !!draft.commentScanEnabled;
+    $("#foldReasonEnabled").checked = draft.foldReasonEnabled !== false;
     const commentMode = draft.commentHitMode === "prompt" ? "prompt" : "fold";
     const commentModeInput = root.querySelector(`input[name="commentHitMode"][value="${commentMode}"]`);
     if (commentModeInput) commentModeInput.checked = true;
@@ -473,6 +474,7 @@ export async function mountStrikeOptions(root) {
       draft[id] = $(`#${id}`).checked;
     }
     draft.commentScanEnabled = $("#commentScanEnabled").checked;
+    draft.foldReasonEnabled = $("#foldReasonEnabled").checked;
     draft.commentHitMode = root.querySelector('input[name="commentHitMode"]:checked')?.value === "prompt" ? "prompt" : "fold";
     draft.libraryChipThreshold = Number($("#libraryChipThreshold").value);
     draft.vetoCooldownDays = Number($("#vetoCooldownDays").value);

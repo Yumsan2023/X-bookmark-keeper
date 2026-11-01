@@ -427,6 +427,8 @@ export function defaultSettings() {
     commentScanEnabled: false,
     /** "fold" collapses the matching reply. "prompt" leaves the yellow chip. Never auto mute/block. */
     commentHitMode: "fold",
+    /** Collapse bar names the keyword, rule, or AI label. Off still folds, without the reason. */
+    foldReasonEnabled: true,
     ai: {
       enabled: false,
       autoSuggestSuspects: false,
@@ -753,6 +755,7 @@ export function matchRules(packs, ctx) {
       packName: row.hit.packName,
       suggestTag: row.hit.suggestTag,
       pattern: String(row.hit.pattern).slice(0, 80),
+      patternType: row.hit.patternType === "regex" ? "regex" : "keyword",
       target: row.hit.target,
     };
     if (row.mode === "soft") reason.cooled = true;
@@ -760,6 +763,130 @@ export function matchRules(packs, ctx) {
     if (row.hit.suggestTag && !tags.includes(row.hit.suggestTag)) tags.push(row.hit.suggestTag);
   }
   return { suspect: reasons.length > 0, tags, reasons };
+}
+
+const FOLD_REASON_PATTERN_MAX = 18;
+
+function reasonIsRegex(reason) {
+  if (reason?.patternType === "regex") return true;
+  if (reason?.patternType === "keyword") return false;
+  const value = String(reason?.pattern || "");
+  return value.startsWith("(?") || value.startsWith("^") || /\\[dDsSwWbB]/.test(value);
+}
+
+/** Short label for the bar. A long regex is omitted so the row stays one chip. */
+function readableHit(reason) {
+  const regex = reasonIsRegex(reason);
+  let value = String(reason?.pattern || "").replace(/\s+/g, " ").trim();
+  if (regex) value = value.replace(/^\(\?i\)/i, "").trim();
+  if (!value) return { regex, text: "" };
+  if (regex && [...value].length > FOLD_REASON_PATTERN_MAX) return { regex: true, text: "" };
+  return { regex, text: snippet(value, FOLD_REASON_PATTERN_MAX) };
+}
+
+function reasonRank(reason) {
+  let score = reason?.cooled ? 0 : 100;
+  const readable = readableHit(reason);
+  if (!readable.regex) score += 40;
+  else if (readable.text) score += 15;
+  const tag = canonicalTag(reason?.suggestTag);
+  if (tag === "Spam") score += 20;
+  else if (tag === "Marketing") score += 10;
+  const len = [...String(reason?.pattern || "")].length;
+  score += Math.max(0, 12 - Math.min(len, 12));
+  return score;
+}
+
+/**
+ * Compact "why" for a collapse bar. Display only: it does not strike, queue,
+ * or change whitelist, follow, or veto state.
+ *
+ * The highest-ranked readable hit is the primary line. Further hits, including
+ * an AI spam/marketing label, collapse to +N. A long regex that would fill the
+ * row becomes "pack +N" instead of the pattern text.
+ * With no keyword hit, an AI label wins, then existing tag-chip text such as 垃圾×2.
+ *
+ * `enabled: false` hides the reason. Missing `enabled` still summarizes.
+ *
+ * @param {{
+ *   enabled?: boolean,
+ *   reasons?: Array<{ pattern?: string, packName?: string, suggestTag?: string, patternType?: string, cooled?: boolean }>,
+ *   aiLabel?: string,
+ *   tags?: Array<{ text?: string, name?: string, more?: boolean }>,
+ * }} [input]
+ * @returns {null | {
+ *   source: "keyword" | "regex" | "pack" | "ai" | "tag",
+ *   pattern: string,
+ *   extra: number,
+ *   aiLabel: string,
+ *   tagText: string,
+ *   details: Array<{ packName: string, pattern: string, suggestTag: string, cooled: boolean, regex: boolean }>,
+ * }}
+ */
+export function foldReasonSummary(input = {}) {
+  if (input.enabled === false) return null;
+  const reasons = (Array.isArray(input.reasons) ? input.reasons : [])
+    .filter((reason) => reason && String(reason.pattern || reason.packName || "").trim())
+    .slice(0, 12);
+  const aiTag = canonicalTag(input.aiLabel);
+  const ai = aiTag === "Spam" || aiTag === "Marketing" ? aiTag : "";
+  const tags = (Array.isArray(input.tags) ? input.tags : [])
+    .filter((tag) => tag && !tag.more && String(tag.text || "").trim())
+    .slice(0, 8);
+  const indexed = reasons.map((reason, index) => ({ reason, index, rank: reasonRank(reason) }));
+  indexed.sort((a, b) => b.rank - a.rank || a.index - b.index);
+  const details = indexed.map((row) => ({
+    packName: snippet(row.reason.packName, 40),
+    pattern: snippet(row.reason.pattern, 80),
+    suggestTag: canonicalTag(row.reason.suggestTag) || "",
+    cooled: !!row.reason.cooled,
+    regex: reasonIsRegex(row.reason),
+  }));
+  if (!indexed.length && !ai && !tags.length) return null;
+  if (indexed.length) {
+    let primary = null;
+    for (const row of indexed) {
+      const hit = readableHit(row.reason);
+      if (!hit.text) continue;
+      primary = hit;
+      break;
+    }
+    if (!primary) {
+      return {
+        source: "pack",
+        pattern: "",
+        extra: indexed.length + (ai ? 1 : 0),
+        aiLabel: ai,
+        tagText: "",
+        details,
+      };
+    }
+    return {
+      source: primary.regex ? "regex" : "keyword",
+      pattern: primary.text,
+      extra: Math.max(0, indexed.length - 1) + (ai ? 1 : 0),
+      aiLabel: ai,
+      tagText: "",
+      details,
+    };
+  }
+  if (ai) {
+    return { source: "ai", pattern: "", extra: 0, aiLabel: ai, tagText: "", details: [] };
+  }
+  return {
+    source: "tag",
+    pattern: "",
+    extra: Math.max(0, tags.length - 1),
+    aiLabel: "",
+    tagText: snippet(tags[0].text, 24),
+    details: tags.map((tag) => ({
+      packName: "",
+      pattern: snippet(tag.text, 24),
+      suggestTag: canonicalTag(tag.name) || "",
+      cooled: false,
+      regex: false,
+    })),
+  };
 }
 
 const KEYWORD_TARGETS = ["text", "handle", "bio", "any"];
@@ -1787,7 +1914,7 @@ export function sanitizeSettings(prev, patch) {
   if (src.language === "auto" || src.language === "zh" || src.language === "en") base.language = src.language;
   if (src.defaultThreshold != null) base.defaultThreshold = clampInt(src.defaultThreshold, 1, 99, base.defaultThreshold);
   if (src.actionMode === "auto" || src.actionMode === "confirm" || src.actionMode === "prompt-only") base.actionMode = src.actionMode;
-  for (const key of ["hideOnThreshold", "muteOnThreshold", "blockOnThreshold", "enablePlatformActions", "rulesEnabled", "hitHistory", "commentScanEnabled"]) {
+  for (const key of ["hideOnThreshold", "muteOnThreshold", "blockOnThreshold", "enablePlatformActions", "rulesEnabled", "hitHistory", "commentScanEnabled", "foldReasonEnabled"]) {
     if (typeof src[key] === "boolean") base[key] = src[key];
   }
   if (src.commentHitMode === "fold" || src.commentHitMode === "prompt") base.commentHitMode = src.commentHitMode;
