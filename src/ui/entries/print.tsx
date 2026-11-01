@@ -21,7 +21,7 @@ function Print() {
   if (!posts) return <p>Loading…</p>
   return (
     <div className="print">
-      <h1>X Bookmarks ({posts.length})</h1>
+      <h1>X Toolkit ({posts.length})</h1>
       {posts.map((p) => (
         <article key={p.tweet_id} className="print-item">
           <h3>{p.name} <small>@{p.screen_name} · {fmtDate(p.created_at, 'zh')}</small></h3>

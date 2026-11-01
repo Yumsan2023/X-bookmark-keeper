@@ -12,6 +12,7 @@ import { downloadMedia, exportPosts, exportPostsBatched, openPrint, type ExportK
 import { AiDialog } from './AiDialog'
 import { useDialogs } from './Dialogs'
 import { PostCard } from './PostCard'
+import { confirmUnbookmark } from '../unbookmark'
 import { NoteEditor, TagEditor } from './TagEditor'
 
 const PAGE = 40
@@ -187,12 +188,9 @@ export function SearchView({ lib, settings, compact, preset }: { lib: Library; s
   }
   const onUnbookmark = async (idsIn?: string[]) => {
     const ids = idsIn?.length ? idsIn : sel([])
-    if (!ids.length) return
-    if (settings.confirmBulkDelete && !(await confirm(`${t('confirm_unbookmark')} (${ids.length})`))) return
-    const hard = await confirm(t('confirm_unbookmark_hard'))
-    const r = await bg({ type: 'bookmarks/delete', tweetIds: ids, removeLocal: hard })
-    flash(r.ok ? `${t('task')}…` : r.error ?? 'error')
-    setSelected(new Set())
+    const message = await confirmUnbookmark({ ids, confirmBulk: settings.confirmBulkDelete, t, confirm })
+    if (message) flash(message)
+    if (message && !message.startsWith(t('del_no_account'))) setSelected(new Set())
   }
   const onRemoveLocal = async () => {
     const ids = sel([])

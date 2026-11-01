@@ -1,0 +1,141 @@
+<div class="wrap">
+      <header class="mast">
+        <div class="stamp" aria-hidden="true"></div>
+        <div>
+          <h1 data-i18n="appName">X 打击账本</h1>
+          <p class="lede" data-i18n="subtitle"></p>
+        </div>
+      </header>
+      <nav>
+        <a href="#overview" data-i18n="overview"></a>
+        <a href="#ledger" data-i18n="ledger"></a>
+        <a href="#thresholds" data-i18n="thresholds"></a>
+        <a href="#rules" data-i18n="rules"></a>
+        <a href="#shortcuts" data-i18n="shortcuts"></a>
+        <a href="#ai" data-i18n="ai"></a>
+        <a href="#data" data-i18n="data"></a>
+        <button id="save-top" class="primary" type="button" data-i18n="save"></button>
+      </nav>
+      <p id="status" role="status"></p>
+
+      <section id="overview">
+        <h2 data-i18n="overview"></h2>
+        <div class="grid" id="stats"></div>
+        <p class="hint" data-i18n="localOnly"></p>
+        <p class="hint" data-i18n="openTimeline"></p>
+        <p id="undo-line" class="hint"></p>
+        <button id="undo-btn" type="button" data-i18n="undo"></button>
+      </section>
+
+      <section id="ledger">
+        <h2 data-i18n="ledger"></h2>
+        <label>
+          <span data-i18n="searchPh"></span>
+          <input id="query" type="search" />
+        </label>
+        <div id="ledger-list"></div>
+      </section>
+
+      <section id="thresholds">
+        <h2 data-i18n="thresholds"></h2>
+        <div class="risk">
+          <strong data-i18n="riskTitle"></strong>
+          <p class="hint" data-i18n="platformRisk"></p>
+        </div>
+        <label>
+          <span data-i18n="language"></span>
+          <select id="language">
+            <option value="auto" data-i18n="langAuto"></option>
+            <option value="zh">中文</option>
+            <option value="en">English</option>
+          </select>
+        </label>
+        <label>
+          <span data-i18n="thresholdN"></span>
+          <input id="defaultThreshold" type="number" min="1" max="99" />
+        </label>
+        <div id="tag-thresholds"></div>
+        <fieldset>
+          <legend data-i18n="actionMode"></legend>
+          <label class="inline"><input type="radio" name="actionMode" value="auto" /> <span data-i18n="modeAuto"></span></label>
+          <p class="hint" data-i18n="modeHelpAuto"></p>
+          <label class="inline"><input type="radio" name="actionMode" value="confirm" /> <span data-i18n="modeConfirm"></span></label>
+          <p class="hint" data-i18n="modeHelpConfirm"></p>
+          <label class="inline"><input type="radio" name="actionMode" value="prompt-only" /> <span data-i18n="modePrompt"></span></label>
+          <p class="hint" data-i18n="modeHelpPrompt"></p>
+        </fieldset>
+        <div class="checks">
+          <label class="inline"><input id="hideOnThreshold" type="checkbox" /> <span data-i18n="hideOn"></span></label>
+          <label class="inline"><input id="muteOnThreshold" type="checkbox" /> <span data-i18n="muteOn"></span></label>
+          <label class="inline"><input id="blockOnThreshold" type="checkbox" /> <span data-i18n="blockOn"></span></label>
+          <label class="inline"><input id="enablePlatformActions" type="checkbox" /> <span data-i18n="platformOn"></span></label>
+          <label class="inline"><input id="rulesEnabled" type="checkbox" /> <span data-i18n="rulesEnabled"></span></label>
+        </div>
+        <label>
+          <span data-i18n="dailyCapLabel"></span>
+          <input id="dailyCap" type="number" min="1" max="500" />
+        </label>
+        <label>
+          <span data-i18n="rateLabel"></span>
+          <input id="rateLimitMs" type="number" min="1000" max="10000" step="100" />
+        </label>
+        <div id="custom-tags"></div>
+      </section>
+
+      <section id="rules">
+        <h2 data-i18n="packs"></h2>
+        <p class="hint" data-i18n="examples"></p>
+        <div id="packs"></div>
+        <div class="row">
+          <button id="add-pack" type="button" data-i18n="addPack"></button>
+          <button id="restore-packs" type="button" data-i18n="restorePacks"></button>
+        </div>
+      </section>
+
+      <section id="shortcuts">
+        <h2 data-i18n="shortcuts"></h2>
+        <p class="hint" data-i18n="shortcutNote"></p>
+        <div class="row">
+          <label class="grow"><span data-i18n="shortcutSpam"></span><button id="shortcut-spam" type="button" data-slot="spam"></button></label>
+          <label class="grow"><span data-i18n="shortcutMarketing"></span><button id="shortcut-marketing" type="button" data-slot="marketing"></button></label>
+          <label class="grow"><span data-i18n="shortcutPicker"></span><button id="shortcut-picker" type="button" data-slot="picker"></button></label>
+        </div>
+      </section>
+
+      <section id="ai">
+        <h2 data-i18n="ai"></h2>
+        <p class="hint" data-i18n="grant"></p>
+        <label class="inline"><input id="aiEnabled" type="checkbox" /> <span data-i18n="aiEnabled"></span></label>
+        <label class="inline"><input id="autoSuggest" type="checkbox" /> <span data-i18n="autoSuggest"></span></label>
+        <label><span data-i18n="aiEndpoint"></span><input id="endpoint" type="url" spellcheck="false" /></label>
+        <label><span data-i18n="aiModel"></span><input id="model" type="text" /></label>
+        <label><span data-i18n="apiKey"></span><input id="apiKey" type="password" autocomplete="off" spellcheck="false" /></label>
+        <button id="clear-key" type="button" data-i18n="clearKey"></button>
+      </section>
+
+      <section id="data">
+        <h2 data-i18n="data"></h2>
+        <div class="row">
+          <button id="save" class="primary" type="button" data-i18n="save"></button>
+        </div>
+        <div class="row">
+          <label class="inline"><input id="includeSecrets" type="checkbox" /> <span data-i18n="includeSecrets"></span></label>
+          <button id="export" type="button" data-i18n="exportJson"></button>
+        </div>
+        <div class="row">
+          <label class="inline"><input id="includeSettings" type="checkbox" /> <span data-i18n="includeSettings"></span></label>
+          <label class="inline"><input type="radio" name="importMode" value="merge" checked /> <span data-i18n="merge"></span></label>
+          <label class="inline"><input type="radio" name="importMode" value="replace" /> <span data-i18n="replace"></span></label>
+          <label class="file"><span data-i18n="importJson"></span><input id="import-file" type="file" accept="application/json,.json" hidden /></label>
+        </div>
+        <h2 data-i18n="queue"></h2>
+        <div id="queue"></div>
+        <h2 data-i18n="log"></h2>
+        <div id="log"></div>
+        <label>
+          <span data-i18n="resetHint"></span>
+          <input id="reset-text" type="text" autocomplete="off" />
+        </label>
+        <button id="reset" class="danger" type="button" data-i18n="reset"></button>
+      </section>
+    </div>

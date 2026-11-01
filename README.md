@@ -1,6 +1,8 @@
-# Bookmark Keeper — X (Twitter) 书签管家 (Chrome MV3 扩展)
+# X Toolkit — X (Twitter) 书签管家 + 打击账本 (Chrome MV3 扩展)
 
-**当前版本: 0.4.4** — 列表与书签（搜索）页统一「删除书签」主操作文案（批量/单条），卡片也有删除入口；流程仍走 X DeleteBookmark。
+**当前版本: 0.7.0** — 一个扩展同时包含书签库与打击账本 / Strike Ledger。本产品此前名为 Bookmark Keeper；本地书签库 IndexedDB 名仍是 `bookmark-keeper`，旧库可直接升级。
+
+在 x.com 时间线上标记垃圾/营销的账本与书签同步共用一个工具栏图标。请卸载单独安装的 X Strike Ledger，否则两个内容脚本会同时注入。
 
 把你在 X 上的**书签**与指定账号的**公开发帖**(UserTweets)同步到本地 IndexedDB，提供中英文全文搜索、文件夹/标签管理、批量操作、导出和可选的 AI 自动归类。
 
@@ -9,7 +11,7 @@
 <details>
 <summary><strong>English summary</strong></summary>
 
-Chrome MV3 extension that syncs your X (Twitter) **bookmarks** and optional public **UserTweets** timelines into local IndexedDB. v0.4.4 clarifies Delete bookmark on Library + Search (bulk/row/card); same DeleteBookmark flow. v0.4.3 added Library list bulk/single unbookmark. v0.4.2 adds Settings LLM model select (common OpenAI-compatible ids + custom). v0.4.1 added light/dark theme toggle (default dark). v0.4 added an X-style library table (column toggles, filter/export panels, paginated Dexie reads). Also: Chinese/English full-text search (MiniSearch + `Intl.Segmenter`), folders/tags, bulk actions, batched export (JSON/CSV/Markdown/Obsidian), optional OpenAI-compatible AI classification. Auth is captured from your logged-in x.com tab (no official paid API). Inspired by twillot’s architecture ideas only — fully rewritten. **Not verified against real X accounts** in this repo; unit tests + Mock-X e2e only. May violate X ToS; use at your own risk. MIT License.
+Chrome MV3 extension **X Toolkit**. It syncs X **bookmarks** and optional public **UserTweets** into local IndexedDB, and adds a local **Strike Ledger**: mark Spam / Marketing on the x.com timeline, then hide locally or (only if you turn it on) mute/block through X’s own menu. v0.7.0 is one extension, version 0.7.0, storage keys `bk_*` for bookmarks and `xsl` / `xslSecret` for the ledger. Unload a standalone Strike Ledger install so the page is not injected twice. Mute and block stay off until you enable them. **Not verified against real X accounts** in this repo; unit tests + Mock-X e2e only. May violate X ToS; use at your own risk. MIT License.
 
 Step-by-step: [docs/USAGE.md](./docs/USAGE.md) · Develop: [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md) · Contribute: [CONTRIBUTING.md](./CONTRIBUTING.md)
 
@@ -65,6 +67,9 @@ Step-by-step: [docs/USAGE.md](./docs/USAGE.md) · Develop: [docs/DEVELOPMENT.md]
 | 线程抓取（TweetDetail，同作者自回复链；同步时可选开关，也可对选中项手动抓取） | ✅ 单测 + Mock e2e；真实响应结构未验证 |
 | 设置页：主题、同步选项、页间延迟、中/英语言、LLM 配置、备份导入导出、清空数据 | ✅ |
 | 侧边栏（sidePanel）+ popup + options 完整页 | ✅ 渲染冒烟 |
+| 多账号书签归属（v0.5）：`accounts` 记录收藏者；删除只动当前登录账号；其他账号的帖子跳过 | ✅ 单测 |
+| 库视图（v0.6）：侧栏、媒体画廊、按引用原文归组、重复项（不自动删除） | ✅ 归组单测；界面随构建 |
+| 打击账本 / Strike Ledger：时间线标记、本地折叠、阈值、关键词黄标、可选 BYOK；静音/屏蔽走 X 菜单且默认关闭 | ✅ 账本纯逻辑单测；**菜单点击未对真实 X 验证** |
 
 ---
 
@@ -100,6 +105,20 @@ npm test               # 建议先跑通单元测试
 - 本仓库可用 `zip` 脚本或 CI 生成该产物；本地亦可参考文末「打包」说明。
 
 可选：`npm run e2e` 需要本机 Chrome（`CHROME_BIN` 可指定路径）和 `openssl`，会启动本地 Mock X 做冒烟测试。
+
+---
+
+## 打击账本 / Strike Ledger
+
+安装这一个扩展即可。如果还加载着独立的 X Strike Ledger，先在 `chrome://extensions` 里移除或停用它，避免同一条帖子出现两套「标记」按钮。
+
+打开 x.com / twitter.com / mobile.x.com 的时间线，每条帖子下方有 **标记**（Shadow DOM）。计数只在你确认之后增加；关键词和 AI 只会给黄标，不会自己记账。数据在 `chrome.storage.local` 的 `xsl`，API key 在单独的 `xslSecret`，不会写进书签 IndexedDB，也和书签设置里的 LLM key 分开。
+
+选项页侧栏 **打击账本** 可以改阈值、确认/自动/仅提示、快捷键、关键词包、导入导出。Popup 只有一个，里面有进入账本设置的入口。
+
+静音和屏蔽 **默认关闭**。打开「允许通过 X 的菜单执行静音/屏蔽」后，扩展会去点帖子上 X 自己的「更多」菜单再点 Mute/Block。这是在替你操作网页，不是官方 API，也 **没有** 接到本扩展的 GraphQL DeleteBookmark / 凭证捕获路径。页面改版可能点不到；失败会排队重试。不要用自动模式配合屏蔽做批量封禁。本地折叠不访问 X。
+
+书签同步里的 “timeline” 是 UserTweets 抓取；打击账本里的时间线是页面上的标记/折叠。两套消息类型分开（书签是 `timeline/start` 这类，账本是 `MARK` / `SET_HIDDEN` 这类）。
 
 ---
 
@@ -282,7 +301,7 @@ flowchart LR
 
 ## 与 twillot 的差异
 
-| 项目 | twillot | Bookmark Keeper |
+| 项目 | twillot | X Toolkit |
 | --- | --- | --- |
 | 范围 | 书签 + 自己的 post/likes/following、发布、授权/付费 | **书签 + 可选 UserTweets 公开发帖**；无授权/付费墙/多账号 |
 | 搜索 | 子串匹配 | MiniSearch + `Intl.Segmenter('zh')`、相关性、前缀/模糊、查询语法、高亮 |
@@ -315,4 +334,4 @@ npm run e2e          # 需先 build；本机 Chrome + openssl
 
 ## 许可证
 
-[MIT](./LICENSE) — Copyright (c) 2026 Bookmark Keeper contributors / applepiemj。
+[MIT](./LICENSE) — Copyright (c) 2026 X Toolkit contributors / applepiemj。

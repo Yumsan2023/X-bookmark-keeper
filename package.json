@@ -1,9 +1,9 @@
 {
-  "name": "bookmark-keeper",
-  "version": "0.4.4",
+  "name": "x-toolkit",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
-  "description": "X (Twitter) 书签/发帖管理 Chrome MV3 扩展:同步、搜索、归类、导出",
+  "description": "X Toolkit — bookmarks, search, export, and Strike Ledger (Chrome MV3)",
   "scripts": {
     "dev": "vite build --watch",
     "build": "tsc --noEmit && vite build",

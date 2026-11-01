@@ -1,4 +1,5 @@
 import MiniSearch from 'minisearch'
+import { matchesAccountFilter } from '@/shared/accounts'
 import type { Post, PostSource } from '@/shared/types'
 import { postSource } from '@/shared/types'
 import { NO_FOLDER, parseQuery, type HasKind, type ParsedQuery, type SourceFilter, type StatusFilter } from './query-parser'
@@ -17,6 +18,8 @@ export interface Filters {
   tags?: string[]
   status?: StatusFilter | 'all'
   source?: SourceFilter | 'all'
+  /** Owning bookmark accounts. `__unknown__` = bookmarks with no account stamp. */
+  accounts?: string[]
 }
 
 export interface SearchInput {
@@ -96,6 +99,7 @@ export function matchesFilters(p: Post, q: ParsedQuery, f: Filters = {}): boolea
   if (status && p.status !== status) return false
   const src = q.source ?? (f.source && f.source !== 'all' ? f.source : undefined)
   if (src && postSource(p) !== src) return false
+  if (!matchesAccountFilter(p, f.accounts)) return false
   return true
 }
 

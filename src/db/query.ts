@@ -2,6 +2,7 @@
  * IndexedDB 分页查询: 空关键字/仅过滤时走索引 + offset/limit, 避免 toArray 全表。
  */
 import type { Collection } from 'dexie'
+import { UNKNOWN_ACCOUNT, normalizeHandle } from '@/shared/accounts'
 import type { Post, PostStatus } from '@/shared/types'
 import { NO_FOLDER, type HasKind, type ParsedQuery } from '@/search/query-parser'
 import type { Filters, SortKey } from '@/search/engine'
@@ -51,6 +52,12 @@ function indexedCollection(parsed: ParsedQuery, filters: Filters): Collection<Po
   const folders = [...parsed.folders, ...(filters.folders ?? [])]
   if (folders.length === 1 && folders[0] !== NO_FOLDER) return db.posts.where('folder').equals(folders[0])
   if (folders.length === 1 && folders[0] === NO_FOLDER) return db.posts.where('folder').equals('')
+
+  const accountFilters = filters.accounts ?? []
+  const namedAccounts = accountFilters.filter((a) => a !== UNKNOWN_ACCOUNT)
+  if (namedAccounts.length === 1 && accountFilters.length === 1) {
+    return db.posts.where('accounts').equals(normalizeHandle(namedAccounts[0]))
+  }
 
   const authors = [
     ...parsed.from,
@@ -116,7 +123,8 @@ export async function pagePostsNoText(opts: PageOpts): Promise<PageResult> {
       (filters.has?.length ?? 0) +
       (filters.tags?.length ?? 0) +
       (filters.status && filters.status !== 'all' ? 1 : 0) +
-      (filters.since != null || filters.until != null ? 1 : 0) >
+      (filters.since != null || filters.until != null ? 1 : 0) +
+      (filters.accounts?.length ?? 0) >
     0
 
   const ord = orderSpec(sort)

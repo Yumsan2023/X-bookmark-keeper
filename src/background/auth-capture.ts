@@ -1,3 +1,4 @@
+import { twidFromCookie } from '@/shared/accounts'
 import type { AuthInfo } from '@/shared/types'
 import { parseGraphqlUrl, OPERATIONS, type OperationName, type QueryIdMap } from '@/api/endpoints'
 import { getAuth, getLearnedQueryIds, saveAuth, saveLearnedQueryIds } from '@/shared/storage'
@@ -12,13 +13,16 @@ export function extractAuthFromHeaders(headers: Header[] | undefined, now = Date
   const token = map.get('authorization')
   const csrf = map.get('x-csrf-token')
   if (!token || !csrf || !/^Bearer\s/i.test(token)) return null
-  return {
+  const auth: AuthInfo = {
     token,
     csrf,
     uuid: map.get('x-client-uuid') ?? '',
     transaction_id: map.get('x-client-transaction-id') ?? '',
     captured_at: now,
   }
+  const userId = twidFromCookie(map.get('cookie'))
+  if (userId) auth.user_id = userId
+  return auth
 }
 
 /** 纯函数: 从页面请求 URL 学习 queryId */
@@ -40,7 +44,7 @@ export function registerAuthCapture(): void {
       void (async () => {
         const auth = extractAuthFromHeaders(details.requestHeaders as Header[])
         if (auth) {
-          const key = `${auth.token}|${auth.csrf}|${auth.uuid}`
+          const key = `${auth.token}|${auth.csrf}|${auth.uuid}|${auth.user_id ?? ''}`
           // 凭证没变化时只刷新 transaction id, 避免频繁写 storage
           if (key !== lastAuthKey) {
             lastAuthKey = key
