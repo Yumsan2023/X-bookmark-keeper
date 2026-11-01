@@ -98,7 +98,8 @@ button:disabled { opacity: 0.45; }
 .meta { color: var(--muted); font-size: 13px; }
 .tag { display: inline-flex; gap: 6px; align-items: center; margin: 4px 6px 0 0; padding: 2px 8px; border-radius: 999px; background: #f6ece1; }
 .evidence { margin: 6px 0 0 12px; color: var(--muted); font-size: 13px; }
-.pattern { display: grid; grid-template-columns: 110px 110px 1fr auto; gap: 6px; margin-top: 6px; }
+.pattern { display: grid; grid-template-columns: 110px 110px minmax(0, 1fr) auto auto; gap: 6px; margin-top: 6px; align-items: center; }
+.pattern .enqueue { margin: 0; white-space: nowrap; font-size: 13px; }
 #status { min-height: 1.3em; font-weight: 650; }
 #status.bad { color: var(--margin); }
 #status.ok { color: var(--ok); }
