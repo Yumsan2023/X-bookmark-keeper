@@ -1,23 +1,22 @@
-import { useRef, useState } from 'react'
-import { clearAll, createBackup, importBackup, validateBackup } from '@/db/posts'
+import { useState } from 'react'
+import { clearAll } from '@/db/posts'
 import type { Settings } from '@/shared/types'
 import { useT } from '../i18n'
 import type { Library } from '../hooks'
 import { useDialogs } from './Dialogs'
-import { saveBlob } from '../util'
 import { AuthorLinkSettings } from './AuthorLinkSettings'
+import { FullBackupPanel } from './FullBackupPanel'
 
 const COMMON_LLM_MODELS = ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1', 'o4-mini'] as const
 const LLM_MODEL_CUSTOM = '__custom__'
 const isCommonLlmModel = (m: string) => (COMMON_LLM_MODELS as readonly string[]).includes(m)
 
-export function SettingsView({ settings, save, lib }: { settings: Settings; save: (s: Settings) => Promise<void>; lib: Library }) {
+export function SettingsView({ settings, save, lib, onNotify }: { settings: Settings; save: (s: Settings) => Promise<void>; lib: Library; onNotify?: (message: string) => void }) {
   const t = useT()
   const { confirm } = useDialogs()
   const [s, setS] = useState(settings)
   const [msg, setMsg] = useState('')
   const [modelCustom, setModelCustom] = useState(() => !isCommonLlmModel(settings.llm.model))
-  const file = useRef<HTMLInputElement>(null)
   const up = (patch: Partial<Settings>) => setS((c) => ({ ...c, ...patch }))
   const upLlm = (patch: Partial<Settings['llm']>) => setS((c) => ({ ...c, llm: { ...c.llm, ...patch } }))
   const num = (v: string, d: number) => (Number.isFinite(+v) && v !== '' ? +v : d)
@@ -123,28 +122,9 @@ export function SettingsView({ settings, save, lib }: { settings: Settings; save
       <div className="row"><button className="primary" onClick={doSave}>{t('save')}</button>{msg && <span className="ok">{msg}</span>}</div>
 
       <h3>{t('data')}</h3>
+      <p className="muted">{t('full_backup_replaces_old')}</p>
+      <FullBackupPanel onNotify={onNotify} onLibraryChange={() => void lib.reload()} />
       <div className="row wrap">
-        <button onClick={async () => {
-          setMsg(t('exporting'))
-          try {
-            const b = await createBackup()
-            saveBlob(`bookmark-keeper-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(b), 'application/json')
-            flash(`${t('backup_export')}: ${b.posts.length}`)
-          } catch (e) { flash((e as Error).message) }
-        }}>{t('backup_export')}</button>
-        <button onClick={() => file.current?.click()}>{t('backup_import')}</button>
-        <input ref={file} type="file" accept="application/json,.json" hidden onChange={async (e) => {
-          const f = e.target.files?.[0]
-          if (!f) return
-          try {
-            const j = JSON.parse(await f.text())
-            if (!validateBackup(j)) throw new Error('invalid backup')
-            const r = await importBackup(j)
-            await lib.reload()
-            flash(`${t('imported')}: ${r.posts}`)
-          } catch (err) { flash((err as Error).message) }
-          e.target.value = ''
-        }} />
         <button className="danger" onClick={async () => { if (await confirm(t('confirm_clear'))) { await clearAll(); await lib.reload() } }}>{t('clear_data')}</button>
       </div>
     </div>

@@ -342,6 +342,7 @@ export async function clearAll(): Promise<void> {
   })
 }
 
+/** Bookmark-only snapshot kept for older files. The options page backup is src/backup. */
 export interface Backup {
   app: 'bookmark-keeper'
   version: 1
