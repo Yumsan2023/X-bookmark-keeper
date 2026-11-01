@@ -11,6 +11,11 @@
  * Comment-area hits (commentScanDecision) never enqueue mute or block.
  * A confirmed reply strike still does not auto-queue; commentStrikePlatform
  * strips mute/block from that threshold. The Mark sheet remains the queue path.
+ * Community-list hits (matchCommunityLists / communityListDecision) only paint
+ * a yellow chip and, when the user chose fold, collapse that card. They do not
+ * add a strike, enqueue mute or block, or call X. A failed URL refresh keeps
+ * the previous local copy. Whitelist still blocks folding. Following still
+ * blocks folding. False-positive vetoes still suppress a hit.
  */
 
 import {
@@ -427,8 +432,16 @@ export function defaultSettings() {
     commentScanEnabled: false,
     /** "fold" collapses the matching reply. "prompt" leaves the yellow chip. Never auto mute/block. */
     commentHitMode: "fold",
-    /** Collapse bar names the keyword, rule, or AI label. Off still folds, without the reason. */
+    /** Collapse bar names the keyword, rule, AI label, or community list. Off still folds, without the reason. */
     foldReasonEnabled: true,
+    /**
+     * Optional community lists. Off until the user turns this on after importing.
+     * Hits are yellow-chip / local-fold only: no strike, no mute, no block.
+     */
+    communityListsEnabled: false,
+    /** "yellow" paints the chip. "fold" may collapse. Never a queue mode. */
+    communityListMode: "yellow",
+    communityLists: /** @type {Array<{ id: string, name: string, enabled: boolean, source: string, url: string, handles: string[], keywords: string[], error: string, fetchedAt: number, updatedAt: number }>} */ ([]),
     ai: {
       enabled: false,
       autoSuggestSuspects: false,
@@ -682,7 +695,10 @@ function patternEqualsVeto(pattern, veto) {
   const vetoType = veto.patternType === "regex" ? "regex" : "keyword";
   if (type !== vetoType) return false;
   if (!vetoTargetsMatch(veto, pattern)) return false;
-  if (veto.packId && pattern.packId && veto.packId !== pattern.packId) return false;
+  // Community-list hits are suppressed by any active veto of the same word,
+  // including one saved from a keyword pack. Pack hits still require the same
+  // pack, so vetoing a community entry does not turn off the user's own packs.
+  if (!pattern?.community && veto.packId && pattern.packId && veto.packId !== pattern.packId) return false;
   if (vetoType === "regex") return String(pattern.pattern || pattern.value || "") === String(veto.pattern);
   return fold(pattern.pattern || pattern.value || "") === fold(veto.pattern);
 }
@@ -765,6 +781,441 @@ export function matchRules(packs, ctx) {
   return { suspect: reasons.length > 0, tags, reasons };
 }
 
+/** How many community lists, and how many handles or words each list keeps. */
+export const COMMUNITY_LIST_CAP = 6;
+export const COMMUNITY_ENTRY_CAP = 1500;
+
+/**
+ * https only, plus loopback http. Credentials in the URL are rejected.
+ * @param {unknown} raw
+ * @returns {string}
+ */
+export function allowedCommunityUrl(raw) {
+  const text = String(raw || "").trim();
+  if (!text || text.length > 500) return "";
+  try {
+    const url = new URL(text);
+    if (url.username || url.password) return "";
+    if (url.protocol === "https:") return url.toString();
+    if (url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1")) return url.toString();
+    return "";
+  } catch {
+    return "";
+  }
+}
+
+/** Origin pattern for chrome.permissions.request. Empty when the URL is rejected. */
+export function communityPermissionOrigin(raw) {
+  const url = allowedCommunityUrl(raw);
+  if (!url) return "";
+  return `${new URL(url).origin}/*`;
+}
+
+function communityPackId(listId) {
+  const id = String(listId || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 36);
+  return `c-${id || "list"}`.slice(0, 40);
+}
+
+function cleanCommunityKeyword(raw) {
+  const value = String(raw ?? "").replace(/\s+/g, " ").trim();
+  if (value.length < 2 || value.length > 80) return "";
+  if (/[\u0000-\u001f]/.test(value)) return "";
+  if (!/[\p{L}\p{N}]/u.test(value)) return "";
+  return value;
+}
+
+function takeCommunityEntries(rawHandles, rawKeywords) {
+  const handles = [];
+  const keywords = [];
+  const handleSeen = new Set();
+  const wordSeen = new Set();
+  let truncated = false;
+  for (const item of Array.isArray(rawHandles) ? rawHandles : []) {
+    const handle = sanitizeHandle(typeof item === "string" ? item : "");
+    if (!handle) continue;
+    const key = handle.toLowerCase();
+    if (handleSeen.has(key)) continue;
+    if (handles.length >= COMMUNITY_ENTRY_CAP) {
+      truncated = true;
+      break;
+    }
+    handleSeen.add(key);
+    handles.push(handle);
+  }
+  for (const item of Array.isArray(rawKeywords) ? rawKeywords : []) {
+    const word = cleanCommunityKeyword(typeof item === "string" ? item : "");
+    if (!word) continue;
+    const key = fold(word);
+    if (wordSeen.has(key)) continue;
+    if (keywords.length >= COMMUNITY_ENTRY_CAP) {
+      truncated = true;
+      break;
+    }
+    wordSeen.add(key);
+    keywords.push(word);
+  }
+  return { handles, keywords, truncated };
+}
+
+function parseCommunityText(text, fallbackName) {
+  let name = String(fallbackName || "").trim();
+  const handles = [];
+  const keywords = [];
+  for (const line of String(text || "").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (trimmed.startsWith("#")) {
+      const named = trimmed.match(/^#\s*name\s*[:：]\s*(.+)$/i);
+      if (named?.[1].trim()) name = named[1].trim();
+      continue;
+    }
+    if (/^https?:\/\//i.test(trimmed)) continue;
+    const prefixed = trimmed.match(/^(handle|keyword)\s*[:：]\s*(.+)$/i);
+    if (prefixed) {
+      if (prefixed[1].toLowerCase() === "handle") handles.push(prefixed[2]);
+      else keywords.push(prefixed[2]);
+      continue;
+    }
+    if (trimmed.startsWith("@")) handles.push(trimmed);
+    else keywords.push(trimmed);
+  }
+  return { name: name || "社区名单", handles, keywords };
+}
+
+function finishCommunityParsed(input) {
+  const taken = takeCommunityEntries(input?.handles, input?.keywords);
+  const name = snippet(input?.name || "社区名单", 40) || "社区名单";
+  if (!taken.handles.length && !taken.keywords.length) return { ok: false, error: "empty-list" };
+  const warnings = [];
+  if (taken.truncated) warnings.push(`已按上限保留前 ${COMMUNITY_ENTRY_CAP} 条。`);
+  return { ok: true, name, handles: taken.handles, keywords: taken.keywords, warnings };
+}
+
+/**
+ * Stable list format. JSON object:
+ * `{ "format": "x-toolkit-community-list", "version": 1, "name": "示例名单",
+ *    "handles": ["spam_bot"], "keywords": ["加群领资料"] }`
+ * A JSON array of strings, or plain text, is the same data: `@handle` is an
+ * account, any other line is a literal word, `# name:` sets the title.
+ * Matching is literal. This does not read the ledger.
+ * @param {unknown} raw
+ * @param {{ name?: string }} [options]
+ */
+export function parseCommunityList(raw, options = {}) {
+  const text = String(raw ?? "").replace(/^\uFEFF/, "").trim();
+  if (!text) return { ok: false, error: "empty-list" };
+  if (text.length > 512_000) return { ok: false, error: "too-large" };
+  const fallbackName = snippet(options.name || "", 40);
+  if (text.startsWith("{") || text.startsWith("[")) {
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      return { ok: false, error: "fileBad" };
+    }
+    if (Array.isArray(data)) return finishCommunityParsed(parseCommunityText(data.map((item) => String(item ?? "")).join("\n"), fallbackName));
+    if (!data || typeof data !== "object") return { ok: false, error: "fileBad" };
+    if (data.format != null && data.format !== "x-toolkit-community-list") return { ok: false, error: "fileBad" };
+    return finishCommunityParsed({
+      name: data.name || data.title || fallbackName || "社区名单",
+      handles: data.handles || data.accounts || [],
+      keywords: data.keywords || data.words || [],
+    });
+  }
+  return finishCommunityParsed(parseCommunityText(text, fallbackName));
+}
+
+function normalizeCommunityList(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const url = allowedCommunityUrl(raw.url);
+  const taken = takeCommunityEntries(raw.handles, raw.keywords);
+  if (!taken.handles.length && !taken.keywords.length && !url) return null;
+  let id = String(raw.id || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40);
+  if (!id) id = uid("cl");
+  const hostName = url ? new URL(url).hostname : "";
+  return {
+    id,
+    name: snippet(raw.name || hostName || "社区名单", 40) || "社区名单",
+    enabled: raw.enabled !== false,
+    source: url ? "url" : "local",
+    url,
+    handles: taken.handles,
+    keywords: taken.keywords,
+    error: snippet(raw.error || "", 160),
+    fetchedAt: timeOf(raw.fetchedAt, 0),
+    updatedAt: timeOf(raw.updatedAt, 0),
+  };
+}
+
+function sanitizeCommunityLists(raw) {
+  if (!Array.isArray(raw)) return [];
+  const lists = [];
+  const seenId = new Set();
+  const seenUrl = new Set();
+  for (const item of raw) {
+    if (lists.length >= COMMUNITY_LIST_CAP) break;
+    const list = normalizeCommunityList(item);
+    if (!list) continue;
+    if (seenId.has(list.id)) continue;
+    if (list.url && seenUrl.has(list.url)) continue;
+    seenId.add(list.id);
+    if (list.url) seenUrl.add(list.url);
+    lists.push(list);
+  }
+  return lists;
+}
+
+function communityListSummary(list) {
+  return {
+    id: list.id,
+    name: list.name,
+    source: list.source,
+    url: list.url,
+    enabled: list.enabled !== false,
+    handles: list.handles.length,
+    keywords: list.keywords.length,
+    error: list.error || "",
+  };
+}
+
+/**
+ * Save one pasted or file list on this device. Does not enable the feature,
+ * does not strike, and does not touch the queue.
+ */
+export function importCommunityList(state, input, now = Date.now()) {
+  if (!state?.settings) return { ok: false, error: "empty-list" };
+  const parsed = parseCommunityList(input?.text, { name: input?.name });
+  if (!parsed.ok) return parsed;
+  if (!Array.isArray(state.settings.communityLists)) state.settings.communityLists = [];
+  if (state.settings.communityLists.length >= COMMUNITY_LIST_CAP) return { ok: false, error: "list-full" };
+  const list = normalizeCommunityList({
+    id: uid("cl"),
+    name: parsed.name,
+    enabled: true,
+    source: "local",
+    url: "",
+    handles: parsed.handles,
+    keywords: parsed.keywords,
+    error: "",
+    fetchedAt: 0,
+    updatedAt: now,
+  });
+  if (!list) return { ok: false, error: "empty-list" };
+  state.settings.communityLists.push(list);
+  return { ok: true, warnings: parsed.warnings || [], list: communityListSummary(list) };
+}
+
+/** Drop one list. Does not change strikes, whitelist, or the queue. */
+export function removeCommunityList(state, id) {
+  const lists = state?.settings?.communityLists;
+  if (!Array.isArray(lists)) return { ok: false, error: "no-list" };
+  const next = lists.filter((item) => item.id !== String(id || ""));
+  if (next.length === lists.length) return { ok: false, error: "no-list" };
+  state.settings.communityLists = next;
+  return { ok: true };
+}
+
+/** Enable or disable one saved list. The master switch is a separate setting. */
+export function setCommunityListEnabled(state, input) {
+  const lists = state?.settings?.communityLists;
+  if (!Array.isArray(lists)) return { ok: false, error: "no-list" };
+  const list = lists.find((item) => item.id === String(input?.id || ""));
+  if (!list) return { ok: false, error: "no-list" };
+  if (typeof input?.enabled === "boolean") list.enabled = input.enabled;
+  return { ok: true, list: communityListSummary(list) };
+}
+
+/**
+ * Apply a manual URL fetch. Failure keeps the previous handles and keywords
+ * and records `error`. A first fetch that fails does not create a list.
+ * Does not strike or enqueue.
+ * @param {{ url?: string, fetched?: { ok?: boolean, body?: string, error?: string } }} input
+ */
+export function upsertCommunitySubscription(state, input, now = Date.now()) {
+  if (!state?.settings) return { ok: false, error: "bad-url" };
+  const url = allowedCommunityUrl(input?.url);
+  if (!url) return { ok: false, error: "bad-url" };
+  if (!Array.isArray(state.settings.communityLists)) state.settings.communityLists = [];
+  const lists = state.settings.communityLists;
+  const existing = lists.find((item) => item.url === url);
+  const fetched = input?.fetched || {};
+  if (!fetched.ok) {
+    if (!existing) return { ok: false, error: fetched.error || "fetch-failed", kept: false };
+    existing.error = snippet(fetched.error || "fetch-failed", 160);
+    return { ok: true, kept: true, error: existing.error, warnings: [], list: communityListSummary(existing) };
+  }
+  const parsed = parseCommunityList(fetched.body, { name: existing?.name || new URL(url).hostname });
+  if (!parsed.ok) {
+    if (!existing) return { ok: false, error: parsed.error || "fileBad", kept: false };
+    existing.error = snippet(parsed.error || "fileBad", 160);
+    return { ok: true, kept: true, error: existing.error, warnings: [], list: communityListSummary(existing) };
+  }
+  if (!existing && lists.length >= COMMUNITY_LIST_CAP) return { ok: false, error: "list-full" };
+  const next = normalizeCommunityList({
+    id: existing?.id || uid("cl"),
+    name: parsed.name,
+    enabled: existing ? existing.enabled !== false : true,
+    source: "url",
+    url,
+    handles: parsed.handles,
+    keywords: parsed.keywords,
+    error: "",
+    fetchedAt: now,
+    updatedAt: now,
+  });
+  if (!next) return { ok: false, error: "empty-list" };
+  if (existing) lists[lists.indexOf(existing)] = next;
+  else lists.push(next);
+  return { ok: true, kept: false, error: "", warnings: parsed.warnings || [], list: communityListSummary(next) };
+}
+
+function collectCommunityHits(lists, ctx) {
+  const hits = [];
+  const handle = sanitizeHandle(ctx?.handle).toLowerCase();
+  const hay = fold([ctx?.text, ctx?.bio, ctx?.displayName].filter(Boolean).join("\n"));
+  for (const list of lists || []) {
+    if (!list || list.enabled === false) continue;
+    const listId = String(list.id || "");
+    const listName = snippet(list.name || "社区名单", 40) || "社区名单";
+    const packId = communityPackId(listId);
+    if (handle) {
+      for (const raw of list.handles || []) {
+        const value = sanitizeHandle(raw);
+        if (!value || value.toLowerCase() !== handle) continue;
+        hits.push({
+          community: true,
+          listId,
+          listName,
+          packId,
+          packName: listName,
+          suggestTag: "",
+          pattern: value,
+          patternType: "keyword",
+          target: "handle",
+        });
+        break;
+      }
+    }
+    if (!hay) continue;
+    let matchedWords = 0;
+    for (const raw of list.keywords || []) {
+      const value = cleanCommunityKeyword(raw);
+      if (!value || !hay.includes(fold(value))) continue;
+      hits.push({
+        community: true,
+        listId,
+        listName,
+        packId,
+        packName: listName,
+        suggestTag: "",
+        pattern: value,
+        patternType: "keyword",
+        target: "text",
+      });
+      matchedWords += 1;
+      if (matchedWords >= 8) break;
+    }
+  }
+  return hits;
+}
+
+/**
+ * Yellow-chip matching for community lists. No ledger access. `enabled` must
+ * be true (the master switch). A hit never carries a suggest tag, so it cannot
+ * be confirmed into a strike. Vetoes still drop a hit.
+ */
+export function matchCommunityLists(lists, ctx) {
+  const empty = { suspect: false, reasons: [], recordStrike: false, queueMute: false, queueBlock: false };
+  if (ctx?.enabled !== true) return empty;
+  const now = Number.isFinite(Number(ctx?.now)) ? Number(ctx.now) : Date.now();
+  const vetoes = Array.isArray(ctx?.vetoes) ? ctx.vetoes : [];
+  const tagged = collectCommunityHits(lists, ctx).map((hit) => ({
+    hit,
+    mode: suppressionFor(hit, vetoes, ctx, now),
+  }));
+  const anyFirm = tagged.some((row) => row.mode === "");
+  const byList = new Map();
+  for (const row of tagged) {
+    if (row.mode === "hard") continue;
+    if (row.mode === "soft" && !anyFirm) continue;
+    let bucket = byList.get(row.hit.listId);
+    if (!bucket) {
+      bucket = { hit: row.hit, patterns: [], cooled: row.mode === "soft" };
+      byList.set(row.hit.listId, bucket);
+    }
+    if (row.mode === "") bucket.cooled = false;
+    const key = `${row.hit.target}|${fold(row.hit.pattern)}`;
+    if (!bucket.patterns.some((item) => item.key === key)) {
+      bucket.patterns.push({ key, pattern: row.hit.pattern, target: row.hit.target });
+    }
+  }
+  const reasons = [];
+  for (const bucket of byList.values()) {
+    const primary = bucket.patterns.slice().sort((a, b) => [...a.pattern].length - [...b.pattern].length)[0];
+    reasons.push({
+      community: true,
+      listId: bucket.hit.listId,
+      listName: bucket.hit.listName,
+      packId: bucket.hit.packId,
+      packName: bucket.hit.listName,
+      pattern: primary?.pattern || bucket.hit.listName,
+      patternType: "keyword",
+      target: primary?.target || "text",
+      suggestTag: "",
+      cooled: bucket.cooled,
+    });
+  }
+  return {
+    suspect: reasons.length > 0,
+    reasons,
+    recordStrike: false,
+    queueMute: false,
+    queueBlock: false,
+  };
+}
+
+/**
+ * What to do with one card after a community-list hit.
+ * Never records a strike and never queues mute or block, whatever the input says.
+ * - enabled off, or no hit: inactive
+ * - mode "yellow" (default): chip only
+ * - mode "fold": collapse that timeline card or reply
+ * - whitelist: hard protect — chip only, no fold
+ * - followed === true: soft protect — chip only, no fold
+ * - surface "focal": the open status tweet stays open; chip only
+ * Unknown follow state may fold. It still must not mute, block, or strike.
+ * @param {{ enabled?: boolean, mode?: string, matched?: boolean, whitelist?: boolean, followed?: boolean | null, surface?: string }} [input]
+ */
+export function communityListDecision(input = {}) {
+  const decision = {
+    active: input.enabled === true,
+    suspect: false,
+    fold: false,
+    prompt: false,
+    recordStrike: false,
+    queueMute: false,
+    queueBlock: false,
+  };
+  if (input.enabled !== true || !input.matched) return decision;
+  decision.suspect = true;
+  decision.prompt = true;
+  const protectedAuthor = !!input.whitelist || input.followed === true;
+  if (input.mode === "fold" && !protectedAuthor && input.surface !== "focal") {
+    decision.fold = true;
+    decision.prompt = false;
+  }
+  return decision;
+}
+
+/**
+ * The keyword-pack reason a yellow-chip confirm may turn into a strike.
+ * Community-list reasons are skipped: they have no tag and must not record.
+ */
+export function strikeReasonFromMatch(matched) {
+  const reasons = Array.isArray(matched?.reasons) ? matched.reasons : [];
+  return reasons.find((item) => item && item.suggestTag && item.community !== true) || null;
+}
+
 const FOLD_REASON_PATTERN_MAX = 18;
 
 function reasonIsRegex(reason) {
@@ -776,15 +1227,20 @@ function reasonIsRegex(reason) {
 
 /** Short label for the bar. A long regex is omitted so the row stays one chip. */
 function readableHit(reason) {
+  if (reason?.community) {
+    const name = String(reason.listName || reason.packName || "").replace(/\s+/g, " ").trim();
+    return { regex: false, community: true, text: name ? snippet(name, 12) : "" };
+  }
   const regex = reasonIsRegex(reason);
   let value = String(reason?.pattern || "").replace(/\s+/g, " ").trim();
   if (regex) value = value.replace(/^\(\?i\)/i, "").trim();
-  if (!value) return { regex, text: "" };
-  if (regex && [...value].length > FOLD_REASON_PATTERN_MAX) return { regex: true, text: "" };
-  return { regex, text: snippet(value, FOLD_REASON_PATTERN_MAX) };
+  if (!value) return { regex, community: false, text: "" };
+  if (regex && [...value].length > FOLD_REASON_PATTERN_MAX) return { regex: true, community: false, text: "" };
+  return { regex, community: false, text: snippet(value, FOLD_REASON_PATTERN_MAX) };
 }
 
 function reasonRank(reason) {
+  if (reason?.community) return reason?.cooled ? 5 : 55;
   let score = reason?.cooled ? 0 : 100;
   const readable = readableHit(reason);
   if (!readable.regex) score += 40;
@@ -810,12 +1266,12 @@ function reasonRank(reason) {
  *
  * @param {{
  *   enabled?: boolean,
- *   reasons?: Array<{ pattern?: string, packName?: string, suggestTag?: string, patternType?: string, cooled?: boolean }>,
+ *   reasons?: Array<{ pattern?: string, packName?: string, listName?: string, suggestTag?: string, patternType?: string, cooled?: boolean, community?: boolean }>,
  *   aiLabel?: string,
  *   tags?: Array<{ text?: string, name?: string, more?: boolean }>,
  * }} [input]
  * @returns {null | {
- *   source: "keyword" | "regex" | "pack" | "ai" | "tag",
+ *   source: "keyword" | "regex" | "pack" | "community" | "ai" | "tag",
  *   pattern: string,
  *   extra: number,
  *   aiLabel: string,
@@ -862,7 +1318,7 @@ export function foldReasonSummary(input = {}) {
       };
     }
     return {
-      source: primary.regex ? "regex" : "keyword",
+      source: primary.community ? "community" : primary.regex ? "regex" : "keyword",
       pattern: primary.text,
       extra: Math.max(0, indexed.length - 1) + (ai ? 1 : 0),
       aiLabel: ai,
@@ -1083,6 +1539,7 @@ export function recordRuleHits(state, input, now) {
   const seen = new Set(next.map((item) => `${item.tweetId}|${item.packId}|${item.pattern}`));
   let recorded = 0;
   for (const raw of incoming) {
+    if (raw?.community === true) continue;
     const pattern = snippet(raw?.pattern, 80);
     const packId = String(raw?.packId || "").slice(0, 40);
     const tweetId = String(raw?.tweetId || "").replace(/[^\w-]/g, "").slice(0, 40);
@@ -1611,7 +2068,9 @@ export function falsePositivePlan(input, now = Date.now()) {
     items.push(clean);
   };
   const hits = collectRuleHits(packs, ctx);
+  const communityHits = collectCommunityHits(input?.communityLists, ctx);
   for (const hit of hits) push(hit);
+  for (const hit of communityHits) push(hit);
   if (source === "ai") {
     const distilled = distillSuggestion({
       label: input?.label,
@@ -1638,7 +2097,7 @@ export function falsePositivePlan(input, now = Date.now()) {
   const phrase = distillException({
     text: ctx.text,
     bio: ctx.bio,
-    blocked: [...hits.map((hit) => hit.pattern), ...items.map((item) => item.pattern)],
+    blocked: [...hits.map((hit) => hit.pattern), ...communityHits.map((hit) => hit.pattern), ...items.map((item) => item.pattern)],
     packs,
   }).phrase;
   const days = clampInt(input?.cooldownDays, 0, 365, 14);
@@ -1661,6 +2120,7 @@ export function applyFalsePositive(state, input, now = Date.now()) {
   const days = clampInt(state.settings.vetoCooldownDays, 0, 365, 14);
   const plan = falsePositivePlan({
     packs: state.settings.keywordPacks,
+    communityLists: state.settings.communityLists,
     vetoes: state.vetoes,
     cooldownDays: days,
     source: input?.source,
@@ -1914,10 +2374,12 @@ export function sanitizeSettings(prev, patch) {
   if (src.language === "auto" || src.language === "zh" || src.language === "en") base.language = src.language;
   if (src.defaultThreshold != null) base.defaultThreshold = clampInt(src.defaultThreshold, 1, 99, base.defaultThreshold);
   if (src.actionMode === "auto" || src.actionMode === "confirm" || src.actionMode === "prompt-only") base.actionMode = src.actionMode;
-  for (const key of ["hideOnThreshold", "muteOnThreshold", "blockOnThreshold", "enablePlatformActions", "rulesEnabled", "hitHistory", "commentScanEnabled", "foldReasonEnabled"]) {
+  for (const key of ["hideOnThreshold", "muteOnThreshold", "blockOnThreshold", "enablePlatformActions", "rulesEnabled", "hitHistory", "commentScanEnabled", "foldReasonEnabled", "communityListsEnabled"]) {
     if (typeof src[key] === "boolean") base[key] = src[key];
   }
   if (src.commentHitMode === "fold" || src.commentHitMode === "prompt") base.commentHitMode = src.commentHitMode;
+  if (src.communityListMode === "yellow" || src.communityListMode === "fold") base.communityListMode = src.communityListMode;
+  if (Array.isArray(src.communityLists)) base.communityLists = sanitizeCommunityLists(src.communityLists);
   if (src.dailyCap != null) base.dailyCap = clampInt(src.dailyCap, 1, 500, base.dailyCap);
   if (src.rateLimitMs != null) base.rateLimitMs = clampInt(src.rateLimitMs, 1000, 10000, base.rateLimitMs);
   if (typeof src.libraryChipFromStrikes === "boolean") base.libraryChipFromStrikes = src.libraryChipFromStrikes;

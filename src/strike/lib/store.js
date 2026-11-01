@@ -5,6 +5,7 @@
 
 import {
   allowedAiEndpoint,
+  allowedCommunityUrl,
   addDistilledRules,
   addKeywordToPack,
   aiSuggestionDismissed,
@@ -25,6 +26,7 @@ import {
   exportData,
   finishAction,
   freshState,
+  importCommunityList,
   importData,
   interpretAiLabel,
   normalizeState,
@@ -34,6 +36,7 @@ import {
   publicAccount,
   queueDashboard,
   recordRuleHits,
+  removeCommunityList,
   removeCustomTag,
   restorePacks,
   retryAction,
@@ -45,12 +48,14 @@ import {
   seenAccount,
   setHidden,
   setAuthorFlag,
+  setCommunityListEnabled,
   setWhitelist,
   snippet,
   statsOf,
   suggestionHash,
   toPublicSettings,
   undoVeto,
+  upsertCommunitySubscription,
 } from "./pure.js";
 
 const STATE_KEY = "xsl";
@@ -91,6 +96,33 @@ function isExtensionPage(sender) {
     return url.startsWith(chrome.runtime.getURL(""));
   } catch {
     return false;
+  }
+}
+
+async function loadCommunityDocument(url) {
+  const allowed = allowedCommunityUrl(url);
+  if (!allowed) return { ok: false, error: "bad-url" };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 12_000);
+  try {
+    const res = await fetch(allowed, {
+      method: "GET",
+      redirect: "follow",
+      signal: ctrl.signal,
+      credentials: "omit",
+      cache: "no-store",
+    });
+    if (!allowedCommunityUrl(res.url || allowed)) return { ok: false, error: "bad-url" };
+    if (!res.ok) return { ok: false, error: `http-${res.status}` };
+    const announced = Number(res.headers.get("content-length") || 0);
+    if (announced > 512_000) return { ok: false, error: "too-large" };
+    const text = await res.text();
+    if (text.length > 512_000) return { ok: false, error: "too-large" };
+    return { ok: true, body: text };
+  } catch (error) {
+    return { ok: false, error: error?.name === "AbortError" ? "timeout" : "fetch-failed" };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -345,6 +377,44 @@ export function dispatch(message, sender = {}) {
         const denied = editorOnly(sender);
         if (denied) return denied;
         result = clearHitLog(state);
+        break;
+      }
+      case "IMPORT_COMMUNITY": {
+        const denied = editorOnly(sender);
+        if (denied) return denied;
+        result = importCommunityList(state, { text: message.text, name: message.name }, now);
+        if (!result?.ok) return result;
+        break;
+      }
+      case "SUBSCRIBE_COMMUNITY":
+      case "REFRESH_COMMUNITY": {
+        const denied = editorOnly(sender);
+        if (denied) return denied;
+        let url = allowedCommunityUrl(message.url);
+        if (type === "REFRESH_COMMUNITY") {
+          const list = (state.settings.communityLists || []).find((item) => item.id === String(message.id || ""));
+          if (!list) return { ok: false, error: "no-list" };
+          if (!list.url) return { ok: false, error: "not-url" };
+          url = list.url;
+        }
+        if (!url) return { ok: false, error: "bad-url" };
+        const fetched = await loadCommunityDocument(url);
+        result = upsertCommunitySubscription(state, { url, fetched }, now);
+        if (!result?.ok) return result;
+        break;
+      }
+      case "REMOVE_COMMUNITY": {
+        const denied = editorOnly(sender);
+        if (denied) return denied;
+        result = removeCommunityList(state, message.id);
+        if (!result?.ok) return result;
+        break;
+      }
+      case "SET_COMMUNITY_LIST": {
+        const denied = editorOnly(sender);
+        if (denied) return denied;
+        result = setCommunityListEnabled(state, message);
+        if (!result?.ok) return result;
         break;
       }
       case "PEEK_ACTION": {

@@ -12,6 +12,7 @@
         <a href="#ledger" data-i18n="ledger"></a>
         <a href="#thresholds" data-i18n="thresholds"></a>
         <a href="#rules" data-i18n="rules"></a>
+        <a href="#community" data-i18n="communityNav"></a>
         <a href="#shortcuts" data-i18n="shortcuts"></a>
         <a href="#ai" data-i18n="ai"></a>
         <a href="#data" data-i18n="data"></a>
@@ -155,6 +156,38 @@
         <h2 data-i18n="hits"></h2>
         <div id="hit-log"></div>
         <button id="clear-hits" type="button" data-i18n="clearHits"></button>
+      </section>
+
+      <section id="community">
+        <h2 data-i18n="communityTitle"></h2>
+        <p class="hint" data-i18n="communityHelp"></p>
+        <label class="inline"><input id="communityListsEnabled" type="checkbox" /> <span data-i18n="communityEnabled"></span></label>
+        <fieldset>
+          <legend data-i18n="communityMode"></legend>
+          <label class="inline"><input type="radio" name="communityListMode" value="yellow" /> <span data-i18n="communityModeYellow"></span></label>
+          <p class="hint" data-i18n="communityModeYellowHelp"></p>
+          <label class="inline"><input type="radio" name="communityListMode" value="fold" /> <span data-i18n="communityModeFold"></span></label>
+          <p class="hint" data-i18n="communityModeFoldHelp"></p>
+        </fieldset>
+        <p class="hint example" data-i18n="communityExample"></p>
+        <label>
+          <span data-i18n="communityPaste"></span>
+          <textarea id="community-text" spellcheck="false"></textarea>
+        </label>
+        <p class="hint" data-i18n="communityImportHelp"></p>
+        <div class="row">
+          <button id="community-import" type="button" data-i18n="communityImport"></button>
+          <label class="file"><span data-i18n="communityFile"></span><input id="community-file" type="file" accept="application/json,.json,text/plain,.txt" hidden /></label>
+        </div>
+        <label>
+          <span data-i18n="communityUrl"></span>
+          <input id="community-url" type="url" spellcheck="false" />
+        </label>
+        <p class="hint" data-i18n="communityUrlHelp"></p>
+        <div class="row">
+          <button id="community-subscribe" type="button" data-i18n="communitySubscribe"></button>
+        </div>
+        <div id="community-lists"></div>
       </section>
 
       <section id="shortcuts">

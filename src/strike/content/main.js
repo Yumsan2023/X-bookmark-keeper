@@ -5,6 +5,7 @@ import {
   canonicalTag,
   commentScanDecision,
   commentStrikePlatform,
+  communityListDecision,
   contentHash,
   distillSuggestion,
   eventMatchesShortcut,
@@ -12,8 +13,10 @@ import {
   foldReasonSummary,
   isRateLimitSignal,
   isTypingTarget,
+  matchCommunityLists,
   matchRules,
   resolveLang,
+  strikeReasonFromMatch,
   suggestPackId,
   tagLabel,
   timelineChrome,
@@ -165,6 +168,12 @@ function formatFoldReason(summary) {
       ? t("foldReasonRuleMore", { pattern: summary.pattern, count: summary.extra })
       : t("foldReasonRule", { pattern: summary.pattern });
   }
+  if (summary.source === "community") {
+    const name = summary.pattern || t("communityChip");
+    return summary.extra
+      ? t("foldReasonCommunityMore", { name, count: summary.extra })
+      : t("foldReasonCommunity", { name });
+  }
   if (summary.source === "pack") return t("foldReasonPack", { count: summary.extra });
   if (summary.source === "ai") return t("aiChip", { tag: tagLabel(summary.aiLabel, lang) });
   if (summary.source === "tag") {
@@ -239,7 +248,11 @@ function placeholder(article, meta, record, kind, extras = {}) {
   toggle.setAttribute("aria-expanded", open ? "true" : "false");
   const title = document.createElement("span");
   title.className = "xsl-ph-title";
-  title.textContent = kind === "comment" ? t("commentFolded", { handle: meta.handle }) : t("collapsed", { handle: meta.handle });
+  title.textContent = kind === "comment"
+    ? t("commentFolded", { handle: meta.handle })
+    : kind === "community"
+      ? t("communityFolded", { handle: meta.handle })
+      : t("collapsed", { handle: meta.handle });
   toggle.append(title);
   if (chrome.protect) {
     const badge = document.createElement("span");
@@ -256,7 +269,11 @@ function placeholder(article, meta, record, kind, extras = {}) {
     if (reasonTitle) reason.title = reasonTitle;
     toggle.append(reason);
   }
-  const aside = reasonText && kind === "comment" ? t("commentFoldMeta") : "";
+  const aside = reasonText && kind === "comment"
+    ? t("commentFoldMeta")
+    : reasonText && kind === "community"
+      ? t("communityFoldMeta")
+      : "";
   toggle.title = [open ? t("foldHide") : t("showOnce"), reasonTitle, aside].filter(Boolean).join(" · ");
   toggle.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" && event.key !== " ") return;
@@ -267,7 +284,11 @@ function placeholder(article, meta, record, kind, extras = {}) {
   if (!reasonText) {
     detail = document.createElement("div");
     detail.className = "xsl-ph-meta";
-    detail.textContent = kind === "comment" ? t("commentFoldMeta") : (bits.join(" · ") || t("hiddenOn"));
+    detail.textContent = kind === "comment"
+      ? t("commentFoldMeta")
+      : kind === "community"
+        ? t("communityFoldMeta")
+        : (bits.join(" · ") || t("hiddenOn"));
   }
   const show = document.createElement("button");
   show.type = "button";
@@ -277,12 +298,12 @@ function placeholder(article, meta, record, kind, extras = {}) {
     foldToggle.get(node)?.();
   });
   const buttons = [show];
-  if (kind === "comment") {
+  if (kind === "comment" || kind === "community") {
     const suspect = document.createElement("button");
     suspect.type = "button";
     suspect.className = "xsl-suspect";
     suspect.textContent = t("suspect");
-    suspect.title = t("commentSuspectTitle");
+    suspect.title = kind === "community" ? t("communityNoStrike") : t("commentSuspectTitle");
     suspect.addEventListener("click", (event) => {
       stop(event);
       extras.onSuspect?.();
@@ -325,9 +346,19 @@ function commentDecision(meta, matched) {
 function syncHidden(article, meta, matched, ai) {
   const record = indexOf(meta.userId);
   const accountHide = !!(record && record.hidden);
-  const decision = commentDecision(meta, matched);
+  const keywordOnly = matched?.keyword ? { suspect: true, reasons: (matched.reasons || []).filter((reason) => !reason.community) } : null;
+  const decision = commentDecision(meta, keywordOnly);
+  const listDecision = communityListDecision({
+    enabled: snapshot?.settings?.communityListsEnabled === true,
+    mode: snapshot?.settings?.communityListMode,
+    matched: !!matched?.community,
+    whitelist: !!record?.whitelist,
+    followed: followOf(meta, record),
+    surface: meta?.surface,
+  });
   const replyFold = !accountHide && decision.fold;
-  const shouldFold = accountHide || replyFold;
+  const listFold = !accountHide && !replyFold && listDecision.fold;
+  const shouldFold = accountHide || replyFold || listFold;
   if (!shouldFold) {
     expanded.delete(meta.key);
     if (article.dataset.xslCollapsed) delete article.dataset.xslCollapsed;
@@ -337,7 +368,8 @@ function syncHidden(article, meta, matched, ai) {
   const open = expanded.has(meta.key);
   if (open) delete article.dataset.xslCollapsed;
   else article.dataset.xslCollapsed = "1";
-  placeholder(article, meta, record, replyFold ? "comment" : "account", {
+  const kind = accountHide ? "account" : replyFold ? "comment" : "community";
+  placeholder(article, meta, record, kind, {
     matched,
     ai,
     open,
@@ -356,18 +388,47 @@ function keywordScanOn(meta) {
   return !!settings?.rulesEnabled;
 }
 
-function suspectFor(meta) {
-  if (!keywordScanOn(meta)) return null;
-  const settings = snapshot?.settings;
-  const matched = matchRules(settings.keywordPacks, {
+function ruleContext(meta) {
+  return {
     text: meta.text,
     handle: meta.handle,
     bio: meta.bio,
+    displayName: meta.displayName,
     vetoes: snapshot?.vetoes,
     now: Date.now(),
+  };
+}
+
+function keywordMatch(meta) {
+  if (!keywordScanOn(meta)) return null;
+  const matched = matchRules(snapshot?.settings?.keywordPacks, ruleContext(meta));
+  if (!matched.suspect) return null;
+  return matched;
+}
+
+function communityMatch(meta) {
+  const settings = snapshot?.settings;
+  if (settings?.communityListsEnabled !== true) return null;
+  const matched = matchCommunityLists(settings.communityLists, {
+    ...ruleContext(meta),
+    enabled: true,
   });
   if (!matched.suspect) return null;
   return matched;
+}
+
+function suspectFor(meta) {
+  const keyword = keywordMatch(meta);
+  const community = communityMatch(meta);
+  if (!keyword && !community) return null;
+  return {
+    suspect: true,
+    reasons: [...(keyword?.reasons || []), ...(community?.reasons || [])],
+    tags: keyword?.tags || [],
+    keyword: !!keyword,
+    community: !!community,
+    recordStrike: false,
+  };
 }
 
 function selectedIn(article) {
@@ -384,6 +445,7 @@ function maybeRecordHits(meta, matched) {
   const known = new Set((snapshot.hitLog || []).map((item) => `${item.tweetId}|${item.packId}|${item.pattern}`));
   const fresh = [];
   for (const reason of matched.reasons) {
+    if (reason.community) continue;
     const key = `${meta.tweetId}|${reason.packId}|${reason.pattern}`;
     if (known.has(key) || reportedHits.has(key)) continue;
     reportedHits.add(key);
@@ -675,12 +737,38 @@ async function openTags(article) {
   }
 }
 
+async function explainCommunity(article) {
+  const meta = describe(article);
+  const matched = meta && suspectFor(meta);
+  if (!matched?.community) return;
+  const names = [...new Set(matched.reasons.filter((reason) => reason.community).map((reason) => reason.listName).filter(Boolean))].slice(0, 4);
+  const terms = matched.reasons.filter((reason) => reason.community).map((reason) => reason.pattern).filter(Boolean).slice(0, 4);
+  const choice = await withOverlay(() => openChoice(overlay, {
+    title: t("communityChip"),
+    body: t("communityBody", { names: names.join(lang === "zh" ? "、" : ", ") || t("communityChip"), terms: terms.join(lang === "zh" ? "、" : ", ") }),
+    warning: t("communityNoStrike"),
+    checks: [],
+    falsePositive: t("notSpam"),
+    confirm: "",
+    cancel: t("cancel"),
+  }));
+  if (choice?.falsePositive) await offerFalsePositive(meta, "suspect");
+}
+
 async function confirmRule(article) {
   const meta = describe(article);
   const matched = meta && suspectFor(meta);
   if (!matched) return;
-  const reason = matched.reasons.find((item) => item.suggestTag) || matched.reasons[0];
-  if (!reason?.suggestTag) {
+  const reason = strikeReasonFromMatch(matched);
+  if (!reason) {
+    if (matched.reasons.some((item) => !item.community)) {
+      await openTags(article);
+      return;
+    }
+    if (matched.community) {
+      await explainCommunity(article);
+      return;
+    }
     await openTags(article);
     return;
   }
@@ -704,6 +792,7 @@ async function offerFalsePositive(meta, source, extra = {}) {
   const settings = snapshot?.settings || {};
   const plan = falsePositivePlan({
     packs: settings.keywordPacks,
+    communityLists: settings.communityLists,
     vetoes: snapshot?.vetoes,
     cooldownDays: settings.vetoCooldownDays,
     now: Date.now(),
@@ -871,14 +960,20 @@ function render(article, meta) {
   const ai = aiResults.get(meta.tweetId);
   const settings = snapshot?.settings;
   const shortcuts = settings?.shortcuts || {};
-  if (matched && settings?.ai?.enabled && settings.ai.autoSuggestSuspects && settings.ai.hasApiKey && !aiAsked.has(meta.tweetId)) {
+  const keywordHit = !!matched?.reasons?.some((reason) => !reason.community);
+  if (keywordHit && settings?.ai?.enabled && settings.ai.autoSuggestSuspects && settings.ai.hasApiKey && !aiAsked.has(meta.tweetId)) {
     askAi(meta);
   }
+  const suspectTitle = (matched?.reasons || []).map((reason) => {
+    if (reason.community) return t("foldReasonCommunity", { name: reason.listName || reason.pattern });
+    return reason.cooled ? `${reason.packName} · ${t("fpCooled")}` : reason.packName;
+  });
+  if (matched?.community && !strikeReasonFromMatch(matched)) suspectTitle.push(t("communityNoStrike"));
   const model = {
     ...chrome,
     signature: {
       ...chrome.signature,
-      suspect: matched?.reasons?.map((reason) => `${reason.packId}:${reason.pattern}:${reason.cooled ? 1 : 0}`).join(",") || "",
+      suspect: matched?.reasons?.map((reason) => `${reason.community ? "c" : "k"}:${reason.packId}:${reason.pattern}:${reason.cooled ? 1 : 0}`).join(",") || "",
       ai: ai ? `${ai.label || ai.verdict}:${ai.reason || ""}` : "",
       ask: !!settings?.ai?.enabled,
     },
@@ -886,7 +981,7 @@ function render(article, meta) {
     shortcutTitle: `${shortcuts.spam || "Alt+S"} · ${shortcuts.marketing || "Alt+M"} · ${shortcuts.picker || "Alt+T"}`,
     suspect: matched ? {
       label: matched.reasons.length > 1 ? t("suspectCount", { count: matched.reasons.length }) : t("suspect"),
-      title: matched.reasons.map((reason) => reason.cooled ? `${reason.packName} · ${t("fpCooled")}` : reason.packName).join(" · "),
+      title: suspectTitle.filter(Boolean).join(" · "),
     } : null,
     ai: ai?.ok ? {
       label: ai.label ? t("aiChip", { tag: tagLabel(ai.label, lang) }) : t("aiNone"),

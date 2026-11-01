@@ -78,6 +78,8 @@ input[type="text"], input[type="search"], input[type="number"], input[type="pass
 }
 textarea { min-height: 64px; resize: vertical; }
 #pack-text { min-height: 180px; font-family: ui-monospace, "Cascadia Code", "Source Code Pro", monospace; font-size: 13px; }
+#community-text { min-height: 120px; font-family: ui-monospace, "Cascadia Code", "Source Code Pro", monospace; font-size: 13px; }
+.hint.example { white-space: pre-wrap; font-family: ui-monospace, "Cascadia Code", "Source Code Pro", monospace; font-size: 12px; }
 .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .grow { flex: 1 1 180px; }
 
