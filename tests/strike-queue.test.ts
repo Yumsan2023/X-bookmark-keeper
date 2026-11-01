@@ -15,11 +15,13 @@ import {
   finishAction,
   freshState,
   isRateLimitSignal,
+  matchRules,
   nextActionDelayMs,
   normalizeState,
   peekAction,
   processorHold,
   queueDashboard,
+  recordRuleHits,
   retryFailed,
   setQueuePaused,
   setWhitelist,
@@ -46,6 +48,9 @@ type State = {
     hideOnThreshold: boolean
     dailyCap: number
     rateLimitMs: number
+    tagThresholds?: Record<string, number>
+    hitHistory?: boolean
+    keywordPacks?: unknown
   }
   ledger: Record<string, { whitelist?: boolean; followed?: boolean | null }>
   hidden: Record<string, unknown>
@@ -109,7 +114,7 @@ describe('mute/block queue', () => {
     expect(isRateLimitSignal('Something went wrong')).toBe(false)
   })
 
-  it('enqueues auto mute/block instead of running them, and refuses whitelist, following, and non-auto modes', () => {
+  it('enqueues auto mute/block instead of running them, and refuses whitelist, unknown follow, and non-auto modes', () => {
     const state = newState()
     ready(state, 'auto')
     const marked = account(state, 'spammer', false)
@@ -132,21 +137,6 @@ describe('mute/block queue', () => {
     const again = enqueue(state, { handle: 'spammer', type: 'mute', source: 'auto' }, NOW + 4)
     expect(again.duplicate).toBe(true)
     expect(state.queue).toHaveLength(2)
-
-    const listed = newState()
-    ready(listed, 'auto')
-    const followed = account(listed, 'friend', true)
-    const skippedFollow = applyActions(listed, {
-      userId: followed.userId,
-      handle: 'friend',
-      hide: true,
-      mute: true,
-      block: true,
-      reason: 'threshold-auto',
-    }, NOW + 3)
-    expect(skippedFollow).toMatchObject({ ok: false, error: 'following' })
-    expect(listed.queue).toHaveLength(0)
-    expect(listed.hidden).toEqual({})
 
     const safe = newState()
     ready(safe, 'auto')
@@ -194,6 +184,172 @@ describe('mute/block queue', () => {
       expect(held.queue).toHaveLength(0)
       expect(held.hidden).toEqual({})
     }
+  })
+
+  it('queues mute/block for a followed account once the user confirms strikes up to the threshold', () => {
+    const state = newState()
+    ready(state, 'auto')
+    const marked = account(state, 'friend', true)
+    expect(marked.threshold).toMatchObject({
+      crossed: true,
+      skipped: null,
+      tag: 'Spam',
+      count: 3,
+      n: 3,
+      mode: 'auto',
+      followed: true,
+    })
+    expect(marked.threshold?.suggest).toMatchObject({ hide: false, mute: true, block: true })
+    const queued = applyActions(state, {
+      userId: marked.userId,
+      handle: 'friend',
+      hide: true,
+      mute: true,
+      block: true,
+      reason: 'threshold-auto',
+    }, NOW + 3)
+    expect(queued.ok).toBe(true)
+    expect(queued.done).toEqual(['mute', 'block'])
+    expect(state.hidden).toEqual({})
+    expect(state.queue.map((item) => item.type)).toEqual(['mute', 'block'])
+    expect(state.queue.every((item) => item.source === 'auto' && item.status === 'pending')).toBe(true)
+    const begun = beginAction(state, state.queue[0].id, NOW + 3)
+    expect(begun.ok).toBe(true)
+    expect(state.queue[0].status).toBe('inflight')
+
+    const custom = newState()
+    ready(custom, 'confirm')
+    custom.settings.tagThresholds = { Spam: 2, Marketing: 3 }
+    const below = applyMark(custom, {
+      tag: 'Spam',
+      handle: 'pal',
+      tweetId: 'pal1',
+      textSnippet: 'one',
+      followed: true,
+      source: 'user',
+    }, NOW)
+    expect(below.threshold?.crossed).toBe(false)
+    expect(custom.queue).toHaveLength(0)
+    const reached = applyMark(custom, {
+      tag: 'Spam',
+      handle: 'pal',
+      tweetId: 'pal2',
+      textSnippet: 'two',
+      followed: true,
+      source: 'rule',
+    }, NOW + 1)
+    expect(reached.threshold).toMatchObject({ crossed: true, skipped: null, count: 2, n: 2, mode: 'confirm' })
+    expect(reached.threshold?.suggest.mute).toBe(true)
+    expect(reached.threshold?.suggest.block).toBe(true)
+    const confirmed = applyActions(custom, {
+      userId: reached.userId,
+      handle: 'pal',
+      mute: true,
+      block: true,
+      reason: 'threshold-confirm',
+    }, NOW + 2)
+    expect(confirmed.ok).toBe(true)
+    expect(confirmed.done).toEqual(['mute', 'block'])
+    expect(custom.queue.every((item) => item.source === 'manual')).toBe(true)
+
+    const prompt = newState()
+    ready(prompt, 'prompt-only')
+    const prompted = account(prompt, 'buddy', true)
+    expect(prompted.threshold).toMatchObject({ crossed: true, skipped: null, mode: 'prompt-only' })
+    const refused = applyActions(prompt, {
+      userId: prompted.userId,
+      handle: 'buddy',
+      mute: true,
+      block: true,
+      reason: 'threshold-auto',
+    }, NOW + 3)
+    expect(refused).toMatchObject({ ok: false, error: 'not-auto' })
+    expect(prompt.queue).toHaveLength(0)
+  })
+
+  it('does not enqueue mute/block for a followed account on a keyword, suspect, or AI signal alone', () => {
+    const state = newState()
+    ready(state, 'auto')
+    state.settings.hitHistory = true
+    const hit = matchRules(state.settings.keywordPacks, {
+      text: 'claim your airdrop now',
+      handle: 'friend',
+      bio: '',
+    })
+    expect(hit.suspect).toBe(true)
+    const recorded = recordRuleHits(state, {
+      hits: hit.reasons.map((reason) => ({
+        pattern: reason.pattern,
+        packId: reason.packId,
+        packName: reason.packName,
+        target: reason.target,
+        handle: 'friend',
+        tweetId: 'friendkw1',
+        snippet: 'claim your airdrop now',
+      })),
+    }, NOW)
+    expect(recorded.recorded).toBeGreaterThan(0)
+    expect(state.queue).toHaveLength(0)
+    expect(state.ledger).toEqual({})
+    const followed = { whitelist: false, followed: true as const }
+    expect(autoPlatformAllowed(state.settings, followed, 'mute', 'keyword')).toBe(false)
+    expect(autoPlatformAllowed(state.settings, followed, 'block', 'suspect')).toBe(false)
+    expect(autoPlatformAllowed(state.settings, followed, 'mute', 'ai')).toBe(false)
+    for (const reason of ['keyword', 'suspect', 'ai'] as const) {
+      const blocked = applyActions(state, {
+        handle: 'friend',
+        mute: true,
+        block: true,
+        reason,
+      }, NOW)
+      expect(blocked).toMatchObject({ ok: false, error: 'signal' })
+    }
+    expect(state.queue).toHaveLength(0)
+
+    const marked = applyMark(state, {
+      tag: 'Spam',
+      handle: 'friend',
+      tweetId: 'friendai1',
+      textSnippet: 'not confirmed as a full threshold',
+      followed: true,
+      source: 'ai',
+    }, NOW + 1)
+    expect(marked.threshold?.crossed).toBe(false)
+    expect(state.queue).toHaveLength(0)
+  })
+
+  it('lets the Mark sheet queue mute or block for an account the user follows', () => {
+    const state = newState()
+    ready(state, 'confirm')
+    const marked = applyMark(state, {
+      tag: 'Spam',
+      handle: 'friend',
+      tweetId: 'friendq1',
+      textSnippet: 'one strike is enough to queue by hand',
+      followed: true,
+      source: 'user',
+    }, NOW)
+    expect(marked.threshold?.crossed).toBe(false)
+    const queued = applyActions(state, {
+      userId: marked.userId,
+      handle: 'friend',
+      mute: true,
+      reason: 'manual',
+    }, NOW + 1)
+    expect(queued.ok).toBe(true)
+    expect(state.queue).toHaveLength(1)
+    expect(state.queue[0]).toMatchObject({ type: 'mute', source: 'manual', handle: 'friend' })
+    const begun = beginAction(state, state.queue[0].id, NOW + 1)
+    expect(begun.ok).toBe(true)
+
+    const blocked = applyActions(state, {
+      userId: marked.userId,
+      handle: 'friend',
+      block: true,
+      reason: 'manual',
+    }, NOW + 2)
+    expect(blocked.ok).toBe(true)
+    expect(state.queue.map((item) => item.type)).toEqual(['mute', 'block'])
   })
 
   it('lets the user queue mute/block explicitly, including after a confirm, without dropping that request', () => {

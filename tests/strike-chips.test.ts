@@ -69,6 +69,8 @@ describe('timeline protect badge and tag chips', () => {
     for (const lang of ['zh', 'en'] as const) {
       const bag = dict[lang]
       expect(bag.protectFollowing).toMatch(/静音|mute/i)
+      expect(bag.protectFollowing).toMatch(/记满阈值|threshold/i)
+      expect(bag.protectWhitelist).toMatch(/不会自动入队|never auto-queued/)
       expect(bag.protectWhitelist).toMatch(/白名单|whitelist/i)
       expect(bag.protectBoth.length).toBeGreaterThan(8)
       expect(bag.chipOpen.length).toBeGreaterThan(4)
@@ -76,12 +78,19 @@ describe('timeline protect badge and tag chips', () => {
     }
   })
 
-  it('still refuses auto mute and block for the accounts the badge marks as protected', () => {
+  it('keeps whitelist and unknown follow off the auto queue, and lets a followed account through the threshold gate', () => {
     expect(autoPlatformAllowed(platformOn, { whitelist: true, followed: false }, 'mute')).toBe(false)
-    expect(autoPlatformAllowed(platformOn, { whitelist: false, followed: true }, 'block')).toBe(false)
     expect(autoPlatformAllowed(platformOn, { whitelist: true, followed: true }, 'mute')).toBe(false)
+    expect(autoPlatformAllowed(platformOn, { whitelist: true, followed: true }, 'block')).toBe(false)
     expect(autoPlatformAllowed(platformOn, { whitelist: false, followed: null }, 'mute')).toBe(false)
+    expect(autoPlatformAllowed(platformOn, { whitelist: false, followed: true }, 'mute')).toBe(true)
+    expect(autoPlatformAllowed(platformOn, { whitelist: false, followed: true }, 'block')).toBe(true)
     expect(autoPlatformAllowed(platformOn, { whitelist: false, followed: false }, 'mute')).toBe(true)
     expect(autoPlatformAllowed(platformOn, { whitelist: false, followed: false }, 'block')).toBe(true)
+    const followed = { whitelist: false, followed: true as const }
+    expect(autoPlatformAllowed(platformOn, followed, 'mute', 'keyword')).toBe(false)
+    expect(autoPlatformAllowed(platformOn, followed, 'block', 'suspect')).toBe(false)
+    expect(autoPlatformAllowed(platformOn, followed, 'mute', 'ai')).toBe(false)
+    expect(autoPlatformAllowed(platformOn, { whitelist: false, followed: false }, 'mute', 'keyword')).toBe(false)
   })
 })

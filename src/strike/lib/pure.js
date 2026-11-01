@@ -117,14 +117,25 @@ export function backoffDelayMs(strikes) {
 }
 
 /**
- * Account and switches allow a mute/block to be queued.
- * Whitelist, following, and unknown follow state are refused.
- * Caller still has to honor auto vs confirm vs prompt-only.
+ * Whether mute/block may be queued for this account.
+ * `trigger` is the reason, not the action mode. The caller still honors
+ * automatic / confirm / prompt-only.
+ *
+ * - "keyword" / "suspect" / "ai": a signal alone. Never queues, including
+ *   for accounts you do not follow.
+ * - "manual": the Mark sheet (排队静音 / 排队屏蔽) or an explicit confirm.
+ *   Following does not block this. Whitelist does not block an explicit queue.
+ * - "threshold" (default): the user confirmed enough strikes to reach the
+ *   tag threshold. Whitelist is a hard protect. Unknown follow state stays
+ *   conservative. Following is only a soft protect and does not block this.
  */
-export function autoPlatformAllowed(settings, account, kind) {
+export function autoPlatformAllowed(settings, account, kind, trigger = "threshold") {
+  if (trigger === "keyword" || trigger === "suspect" || trigger === "ai") return false;
   if (!settings?.enablePlatformActions) return false;
+  if (kind !== "mute" && kind !== "block") return false;
+  if (trigger === "manual") return true;
   if (!account || account.whitelist) return false;
-  if (account.followed !== false) return false;
+  if (account.followed !== true && account.followed !== false) return false;
   if (kind === "mute") return !!settings.muteOnThreshold;
   if (kind === "block") return !!settings.blockOnThreshold;
   return false;
@@ -135,8 +146,9 @@ export const CHIP_CAP = 4;
 
 /**
  * Protect badge and persistent tag chips for one timeline author.
- * Display only — this does not enqueue mute or block. Following and
- * whitelist stay refused by autoPlatformAllowed; the badge only shows that.
+ * Display only — this does not enqueue mute or block. The badge is not a
+ * queue decision: whitelist stays a hard protect, and following is only a
+ * soft protect against keyword / yellow-suspect / AI signals.
  * `options.followed` is the live page state and wins over the stored flag.
  * @param {{ whitelist?: boolean, followed?: boolean | null, counts?: Record<string, number> }} [account]
  * @param {{ lang?: string, followed?: boolean | null, limit?: number }} [options]
@@ -1382,7 +1394,6 @@ function thresholdPayload(state, account, tag, prevCount) {
   const n = thresholdFor(state.settings, tag);
   let skipped = null;
   if (account.whitelist) skipped = "whitelist";
-  else if (account.followed === true) skipped = "following";
   return {
     reached: count >= n,
     crossed: prevCount < n && count >= n,
@@ -1591,12 +1602,14 @@ export function applyActions(state, input, now) {
   let mute = !!input.mute;
   let block = !!input.block;
   const ignored = [];
+  if (reason === "keyword" || reason === "suspect" || reason === "ai") {
+    return { ok: false, error: "signal" };
+  }
   if (reason === "threshold-auto") {
     if (state.settings.actionMode !== "auto") return { ok: false, error: "not-auto" };
     if (!account) return { ok: false, error: "no-account" };
     if (account.whitelist) return { ok: false, error: "whitelist" };
-    if (account.followed === true) return { ok: false, error: "following" };
-    if (!state.settings.hideOnThreshold) hide = false;
+    if (!state.settings.hideOnThreshold || account.followed === true) hide = false;
     if (!autoPlatformAllowed(state.settings, account, "mute")) {
       if (mute) ignored.push("mute");
       mute = false;
@@ -1684,9 +1697,9 @@ export function beginAction(state, id, now) {
   if (!state.settings.enablePlatformActions) return { ok: false, error: "platform-off", expired };
   if (item.source !== "manual" && item.source !== "undo") {
     const account = state.ledger[item.userId];
-    if (account?.whitelist || account?.followed === true) {
+    if (account?.whitelist) {
       state.queue = state.queue.filter((entry) => entry.id !== item.id);
-      return { ok: false, error: account?.whitelist ? "whitelist" : "following", changed: true, expired };
+      return { ok: false, error: "whitelist", changed: true, expired };
     }
   }
   if (state.rate?.paused) return { ok: false, error: "paused", expired };

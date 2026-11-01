@@ -1,6 +1,6 @@
 # X Toolkit — X (Twitter) 书签管家 + 打击账本 (Chrome MV3 扩展)
 
-**当前版本: 0.7.4** — 一个扩展同时包含书签库与打击账本 / Strike Ledger。本产品此前名为 Bookmark Keeper；本地书签库 IndexedDB 名仍是 `bookmark-keeper`，旧库可直接升级。0.7.1 给打击账本加上静音/屏蔽队列和限流面板。0.7.2 可以编辑关键词包（含文本导入导出），并从帖子把选中的词加进词库；命中只出黄标，不自动记一笔。0.7.3 在可选 BYOK 建议为垃圾或营销时，经你确认后把抽出的短词写入一个词库；仍然不自动记一笔。0.7.4 在时间线上用保护徽章和标签芯片标出已关注/白名单账号，以及已有的打击次数；点芯片只打开标记，不会自动静音或屏蔽。
+**当前版本: 0.7.5** — 一个扩展同时包含书签库与打击账本 / Strike Ledger。本产品此前名为 Bookmark Keeper；本地书签库 IndexedDB 名仍是 `bookmark-keeper`，旧库可直接升级。0.7.1 给打击账本加上静音/屏蔽队列和限流面板。0.7.2 可以编辑关键词包（含文本导入导出），并从帖子把选中的词加进词库；命中只出黄标，不自动记一笔。0.7.3 在可选 BYOK 建议为垃圾或营销时，经你确认后把抽出的短词写入一个词库；仍然不自动记一笔。0.7.4 在时间线上用保护徽章和标签芯片标出已关注/白名单账号，以及已有的打击次数；点芯片只打开标记，不会自动静音或屏蔽。0.7.5 把「已关注」改成软保护：关键词和黄标仍不会自动入队，但你手动把某个标签记满自己设的阈值后，仍按自动/确认/仅提示静音或屏蔽；白名单仍是硬保护，不会自动入队。
 
 在 x.com 时间线上标记垃圾/营销的账本与书签同步共用一个工具栏图标。请卸载单独安装的 X Strike Ledger，否则两个内容脚本会同时注入。
 
@@ -11,7 +11,7 @@
 <details>
 <summary><strong>English summary</strong></summary>
 
-Chrome MV3 extension **X Toolkit**. It syncs X **bookmarks** and optional public **UserTweets** into local IndexedDB, and adds a local **Strike Ledger**: mark Spam / Marketing on the x.com timeline, then hide locally or (only if you turn it on) mute/block through X’s own menu. v0.7.1 queues mute/block (jitter of about 1s+, a daily cap, backoff, pause/resume). v0.7.2 adds editable keyword packs (including plain-text import/export) and **Add selection to keyword pack** from a tweet’s Mark menu or the right-click menu. A keyword hit still only shows the yellow Suspect chip and never adds a strike. v0.7.3 can distill one BYOK spam/marketing suggestion into short keyword rules after you confirm; that save does not add a strike and does not call the model again. v0.7.4 paints a Protected badge on accounts you follow or whitelist, and compact tag chips such as Spam×2 beside the name and in the strike row. Clicking a chip opens Mark and does not enqueue mute or block. Storage keys stay `bk_*` and `xsl` / `xslSecret`. Unload a standalone Strike Ledger install so the page is not injected twice. Mute and block stay off until you enable them. **Not verified against real X accounts** in this repo; unit tests + Mock-X e2e only. May violate X ToS; use at your own risk. MIT License.
+Chrome MV3 extension **X Toolkit**. It syncs X **bookmarks** and optional public **UserTweets** into local IndexedDB, and adds a local **Strike Ledger**: mark Spam / Marketing on the x.com timeline, then hide locally or (only if you turn it on) mute/block through X’s own menu. v0.7.1 queues mute/block (jitter of about 1s+, a daily cap, backoff, pause/resume). v0.7.2 adds editable keyword packs (including plain-text import/export) and **Add selection to keyword pack** from a tweet’s Mark menu or the right-click menu. A keyword hit still only shows the yellow Suspect chip and never adds a strike. v0.7.3 can distill one BYOK spam/marketing suggestion into short keyword rules after you confirm; that save does not add a strike and does not call the model again. v0.7.4 paints a Protected badge on accounts you follow or whitelist, and compact tag chips such as Spam×2 beside the name and in the strike row. Clicking a chip opens Mark and does not enqueue mute or block. v0.7.5 makes following a soft protect: a keyword hit, the yellow Suspect chip, or an AI suggestion alone still does not auto-queue mute or block, and unknown follow state stays conservative. After you confirm enough strikes to reach your per-tag threshold, mute/block follows the same automatic / confirm / prompt-only mode as any other account. Whitelist stays a hard protect and is never auto-queued. The Mark sheet can still queue mute or block for someone you follow. The green badge stays **已关注保护** / **Protected**. Storage keys stay `bk_*` and `xsl` / `xslSecret`. Unload a standalone Strike Ledger install so the page is not injected twice. Mute and block stay off until you enable them. **Not verified against real X accounts** in this repo; unit tests + Mock-X e2e only. May violate X ToS; use at your own risk. MIT License.
 
 Step-by-step: [docs/USAGE.md](./docs/USAGE.md) · Develop: [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md) · Contribute: [CONTRIBUTING.md](./CONTRIBUTING.md)
 
@@ -73,7 +73,8 @@ Step-by-step: [docs/USAGE.md](./docs/USAGE.md) · Develop: [docs/DEVELOPMENT.md]
 | 静音/屏蔽队列（0.7.1）：抖动、每日上限、可识别的限流退避、暂停/继续、失败重试；打击账本页的队列面板 | ✅ 队列纯逻辑单测；**菜单点击未对真实 X 验证** |
 | 关键词包（0.7.2）：启用/停用、编辑、文本导入导出；从帖子「标记」或右键把选中词加入词库；可选命中记录。命中只出黄标 | ✅ 词库纯逻辑单测；**右键菜单未对真实 X 验证** |
 | AI 建议蒸馏（0.7.3）：垃圾/营销建议可经确认存为短关键词或紧规则，一次写入所选词库。不自动记一笔，不批量请求模型 | ✅ 蒸馏纯逻辑单测；**建议芯片未对真实 X / 真实 LLM 验证** |
-| 保护徽章 + 标签芯片（0.7.4）：已关注/白名单在时间线上显示保护徽章；已有标签显示成「垃圾×2」。点芯片打开标记。不自动入队静音/屏蔽 | ✅ 展示模型单测；**真实时间线注入未验证** |
+| 保护徽章 + 标签芯片（0.7.4）：已关注/白名单在时间线上显示保护徽章；已有标签显示成「垃圾×2」。点芯片打开标记 | ✅ 展示模型单测；**真实时间线注入未验证** |
+| 已关注软保护（0.7.5）：关键词/黄标/AI 建议仍不自动入队；你手动记满阈值后按自动/确认/仅提示处理。白名单仍不自动入队。标记面板的排队静音/屏蔽对已关注账号可用 | ✅ 队列策略单测；**真实时间线注入未验证** |
 
 ---
 
@@ -126,10 +127,10 @@ npm test               # 建议先跑通单元测试
 
 达到阈值，或你在「标记」面板里点「排队静音 / 排队屏蔽」时，动作只进入本地队列，不会在页面上连点。打开的时间线每次只处理一条能看见的账号：间隔不少于设置值，再加约 1–2.5 秒抖动；有每日上限；若页面上出现能识别的限流提示（例如 429）会退避。选项页 **打击账本 → 队列与限流** 显示队列长度、失败项、最近错误、今日已用/上限，并可暂停、继续、重试失败项、清空等待或失败项。
 
-自动 / 确认 / 仅提示仍然有效。白名单和你关注的账号不会被自动入队；关注状态未知时也不会自动静音或屏蔽。仅提示只出通知。仍只点 X 自己的菜单。
+自动 / 确认 / 仅提示仍然有效。**白名单是硬保护**：不会自动入队静音或屏蔽。**已关注是软保护**：关键词命中、黄色「可疑」和单独的 AI 建议不会自动入队；关注状态未知时也不会自动静音或屏蔽。你自己把某个标签记到该标签的阈值（例如垃圾 ×3，或你在选项里改过的次数）之后，已关注账号和未关注账号走同一套模式：自动则入队，确认则弹出勾选，仅提示只出通知。标记面板里的「排队静音 / 排队屏蔽」对已关注账号可用。仍只点 X 自己的菜单。静音和屏蔽默认关闭。
 
 1. 重新构建并加载 `dist/`。选项页打开「允许通过 X 的菜单执行静音/屏蔽」，每日上限可先设小（例如 3）。模式用 **确认** 更稳妥。
-2. 打开 x.com 时间线，对一个你没有关注、且不在白名单的账号点「标记」→「排队静音」。也可以把垃圾标记到阈值，在确认框里勾选静音或屏蔽。
+2. 打开 x.com 时间线，点「标记」→「排队静音」。已关注账号也可以这样排队。也可以把垃圾标记到阈值，在确认框里勾选静音或屏蔽。白名单账号不会因为记满阈值而自动入队。
 3. 留在能看到该账号帖子的时间线。扩展会按队列去点 X 的「更多」菜单，而不是把队列一次点完。
 4. 回到 **队列与限流** 看长度、失败和今日用量。可暂停后再继续。失败项可以单条或整批重试。
 
@@ -172,7 +173,7 @@ AI 建议默认关闭。密钥仍只在 `xslSecret`，不进词库，也不进�
 
 ### 时间线上的保护徽章和标签芯片（0.7.4）
 
-已关注的账号，以及你放进白名单的账号，本来就不会被自动静音或屏蔽。0.7.4 把这件事画在帖子上，并把这个账号已经有的标签次数直接显示出来，不用先点「标记」。
+0.7.4 把已关注和白名单都画成绿色保护徽章，当时两条路都不自动静音或屏蔽，并把这个账号已经有的标签次数直接显示出来，不用先点「标记」。0.7.5 把「已关注」改成软保护，见下一节。
 
 一条普通帖子在 x.com 时间线上大致是这样（英文界面把「已关注保护」写成 **Protected**，白名单同样是 **Protected**）：
 
@@ -184,12 +185,25 @@ AI 建议默认关闭。密钥仍只在 `xslSecret`，不进词库，也不进�
 [标记]  [已关注保护]  [垃圾×2]  [营销×1]  [可疑]
 ```
 
-- **名字下方一行**（Shadow DOM，插在 X 的用户名区块后面，不塞进会被截断的名字链接里）：绿色徽章。你正在关注时是 **已关注保护**；只有白名单、页面上又能看出未关注时是 **白名单保护**。两者都有时仍显示 **已关注保护**，悬停说明两者都不会自动入队。同一行接着紧凑芯片，例如 **垃圾×2**、**营销×1**。内置标签在前，其余按次数从高到低，最多 4 个，多出来的是 **+N**。
+- **名字下方一行**（Shadow DOM，插在 X 的用户名区块后面，不塞进会被截断的名字链接里）：绿色徽章。你正在关注时是 **已关注保护**；只有白名单、页面上又能看出未关注时是 **白名单保护**。两者都有时仍显示 **已关注保护**。悬停时，已关注说明「不会因关键词/黄标自动入队；你手动记满阈值后仍可静音或屏蔽」；白名单仍说明「不会自动入队」。同一行接着紧凑芯片，例如 **垃圾×2**、**营销×1**。内置标签在前，其余按次数从高到低，最多 4 个，多出来的是 **+N**。
 - **帖子动作栏**（原来的「标记」那一行，同样是 Shadow DOM）：先是 **标记**，然后同一枚保护徽章和同样的芯片，再是原来的黄标 **可疑** 和 AI 芯片。折叠后的占位条也会带上徽章和 `垃圾×2` 这种计数。
-- **点芯片**会打开原来的标记面板，不会记一笔，也不会把静音/屏蔽放进队列。保护徽章本身不是按钮。面板顶部用绿色字重复「不会自动入队」。关注状态以页面上这次看到的为准；看不到关注按钮、又不在白名单时，不显示保护徽章（自动静音本来也会跳过未知状态）。
+- **点芯片**会打开原来的标记面板，不会记一笔，也不会把静音/屏蔽放进队列。保护徽章本身不是按钮。面板顶部用绿色字重复徽章的悬停说明：已关注不再写成「永远不能入队」；白名单仍是「不会自动入队」。关注状态以页面上这次看到的为准；看不到关注按钮、又不在白名单时，不显示保护徽章（自动静音本来也会跳过未知状态）。
 - 时间线重绘把注入节点拿掉时，扫描会把 Shadow host 挂回去。挂不上用户名区块时，动作栏里仍然有徽章和芯片。
 
-重新构建并加载 `dist/`（版本 0.7.4）后，打开 x.com 时间线即可看到。这条注入**没有**在真实 X 账号上验证过。
+重新构建并加载 `dist/`（版本 0.7.4）后，打开 x.com 时间线即可看到。这条注入**没有**在真实 X 账号上验证过。0.7.5 起，已关注徽章的含义见下一节；白名单徽章仍然表示不会自动入队。
+
+### 已关注是软保护，白名单仍是硬保护（0.7.5）
+
+0.7.4 把「你正在关注」和白名单都画成绿色保护徽章，并且两条路都不让静音/屏蔽自动入队。已关注挡得太死：你关注的账号仍可能刷屏。0.7.5 把两者拆开。
+
+- **已关注（软保护）**。绿色徽章仍是 **已关注保护**（英文 **Protected**）。关键词命中、黄色 **可疑**、以及没有经你确认的 AI 建议，都不会把静音或屏蔽放进队列。关注状态在页面上看不出来时，仍然保守：不会自动静音或屏蔽。
+- **你自己记满阈值**。在「标记」里确认垃圾/营销（或快捷键、或对黄标/AI 点「确认记一笔」）直到该标签的阈值，例如默认垃圾 ×3，或你在选项里为这个标签改过的次数。记满之后，和未关注账号一样走当前模式：**自动**则入队静音/屏蔽（需已打开对应开关），**确认**则弹出勾选，**仅提示**只出通知、不入队。本地折叠仍不因「已关注」在自动模式下打开。
+- **标记面板上的「排队静音 / 排队屏蔽」**对已关注账号可用。这一下是你明确要求入队，不看关键词，也不看有没有记满阈值。
+- **白名单（硬保护）**。徽章文案仍可写成「不会自动入队」。记满阈值也不会自动入队静音或屏蔽。已关注并且在白名单里时，徽章仍显示 **已关注保护**，悬停会说明白名单不会自动入队。
+
+静音和屏蔽仍默认关闭，仍只点 X 自己的菜单，不走 GraphQL。重新构建并加载 `dist/`（版本 0.7.5）。这条策略有单测；**没有**在真实 X 账号上验证过。
+
+发布包 `x-toolkit-0.7.5-chrome.zip` 的根目录就是可「加载已解压的扩展程序」的文件夹，内含 `manifest.json`（版本 0.7.5）。本地重新打包：`npm run build`，再把 `dist/` 里的文件（不要多套一层 `dist/` 目录）打成 zip。
 
 ---
 
