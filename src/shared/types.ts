@@ -155,13 +155,21 @@ export type Lang = 'zh' | 'en'
 export type Theme = 'dark' | 'light'
 
 export interface LlmConfig {
-  endpoint: string // OpenAI 兼容 base, 例如 https://api.openai.com/v1
+  /** OpenAI 兼容 base, 例如 https://api.openai.com/v1 或 http://127.0.0.1:11434/v1 */
+  endpoint: string
+  /** 云端必填。本机 Ollama 可留空, 或填任意占位符 (请求里作为 Bearer)。 */
   apiKey: string
   model: string
   batchSize: number
   /** 每批之间的最小间隔 (ms) */
   intervalMs: number
+  /** 旧版「建议新文件夹」。标签分类不再使用, 保留以免旧设置丢字段。 */
   allowNewFolders: boolean
+  /**
+   * 允许模型提出库里还没有的内容标签。缺省视为 true
+   * (mergeSettings 会补上默认值)。
+   */
+  allowNewTags: boolean
 }
 
 export interface Settings {
@@ -202,6 +210,7 @@ export const DEFAULT_SETTINGS: Settings = {
     batchSize: 20,
     intervalMs: 2000,
     allowNewFolders: false,
+    allowNewTags: true,
   },
 }
 

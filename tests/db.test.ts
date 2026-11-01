@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { db } from '@/db/db'
 import { parseTimelinePage, type ParsedPost } from '@/api/parser'
 import {
-  addTags, clearAll, createBackup, createLocalFolder, deleteFolder, deleteTag, importBackup, listFolders, listTags, markTweetsDeleted,
+  addTags, applyTagsToPosts, clearAll, createBackup, createLocalFolder, deleteFolder, deleteTag, importBackup, listFolders, listTags, markTweetsDeleted,
   markUnbookmarkedNotSeen, moveToFolder, removeTags, renameFolder, renameTag, upsertFolder, upsertParsed, validateBackup,
 } from '@/db/posts'
 import { bookmarksPage, tweet, tweetEntry } from './fixtures/builders'
@@ -67,6 +67,9 @@ describe('posts repo', () => {
     expect(await db.posts.where('tags').equals('later').count()).toBe(2)
     expect(await deleteTag('later')).toBe(2)
     expect((await listTags()).map((t) => t.tag)).toEqual(['AI'])
+    await applyTagsToPosts([['1', ['ai', '烹饪']], ['2', ['#笔记']]])
+    expect((await db.posts.get('1'))!.tags.sort()).toEqual(['AI', '烹饪'])
+    expect((await db.posts.get('2'))!.tags).toEqual(['笔记'])
   })
 
   it('folders: create, move, rename cascades to posts, delete unfiles', async () => {

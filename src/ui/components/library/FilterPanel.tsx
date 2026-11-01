@@ -20,6 +20,11 @@ export interface LibraryFilterState {
   account: string
   /** Library chip from the strike ledger. */
   authorMark: '' | 'marketing' | 'spam' | 'any'
+  /**
+   * Checked content tags. Several tags match with OR (any tag).
+   * Search-box `tag:a tag:b` stays AND and is separate from this list.
+   */
+  tags: string[]
 }
 
 export const EMPTY_FILTER: LibraryFilterState = {
@@ -34,6 +39,7 @@ export const EMPTY_FILTER: LibraryFilterState = {
   availability: 'all',
   account: '',
   authorMark: '',
+  tags: [],
 }
 
 function toYmd(d: Date): string {
@@ -70,13 +76,51 @@ export function filterStateToSearch(f: LibraryFilterState): {
       source: f.postType || 'all',
       accounts: f.account ? [f.account] : undefined,
       authorMarks: f.authorMark ? [f.authorMark] : undefined,
+      anyTags: f.tags.length ? f.tags : undefined,
     },
   }
 }
 
+export function TagCheckboxList({
+  tags,
+  checked,
+  onChange,
+}: {
+  tags: { tag: string; count: number }[]
+  checked: string[]
+  onChange: (next: string[]) => void
+}) {
+  const t = useT()
+  const set = new Set(checked)
+  const toggle = (tag: string) => {
+    const next = new Set(set)
+    if (next.has(tag)) next.delete(tag)
+    else next.add(tag)
+    onChange([...next])
+  }
+  return (
+    <div className="tag-filter">
+      <div className="lib-field-label">{t('tag_filter_title')}</div>
+      <p className="muted small">{t('tag_filter_or')}</p>
+      {tags.length === 0 ? (
+        <p className="muted small">{t('tag_filter_empty')}</p>
+      ) : (
+        <div className="tag-filter-list" role="group" aria-label={t('tag_filter_title')}>
+          {tags.map((x) => (
+            <label key={x.tag}>
+              <input type="checkbox" checked={set.has(x.tag)} onChange={() => toggle(x.tag)} />
+              #{x.tag} <span className="muted">({x.count})</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function filterChips(
   f: LibraryFilterState,
-  t: (k: 'account_filter' | 'account_unknown' | 'folder' | 'author' | 'lib_content_type' | 'lib_post_type' | 'lib_availability' | 'unfiled' | 'lib_author_mark' | 'chip_marketing' | 'chip_spam' | 'lib_author_mark_any') => string,
+  t: (k: 'account_filter' | 'account_unknown' | 'folder' | 'author' | 'lib_content_type' | 'lib_post_type' | 'lib_availability' | 'unfiled' | 'lib_author_mark' | 'chip_marketing' | 'chip_spam' | 'lib_author_mark_any' | 'tag' | 'tag_filter_or_short') => string,
 ): { id: string; label: string; clear: LibraryFilterState }[] {
   const chips: { id: string; label: string; clear: LibraryFilterState }[] = []
   if (f.account) {
@@ -94,6 +138,13 @@ export function filterChips(
   if (f.authorMark) {
     const label = f.authorMark === 'marketing' ? t('chip_marketing') : f.authorMark === 'spam' ? t('chip_spam') : t('lib_author_mark_any')
     chips.push({ id: 'authorMark', label: `${t('lib_author_mark')}: ${label}`, clear: { ...f, authorMark: '' } })
+  }
+  if (f.tags.length) {
+    chips.push({
+      id: 'tags',
+      label: `${t('tag')}: ${f.tags.map((tag) => '#' + tag).join(' / ')} (${t('tag_filter_or_short')})`,
+      clear: { ...f, tags: [] },
+    })
   }
   return chips
 }
@@ -209,6 +260,7 @@ export function FilterPanel({
               ))}
             </select>
           </label>
+          <TagCheckboxList tags={lib.tags} checked={draft.tags} onChange={(tags) => set('tags', tags)} />
           <label>
             {t('lib_content_type')}
             <select

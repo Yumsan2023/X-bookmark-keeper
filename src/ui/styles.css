@@ -147,7 +147,12 @@ progress { width:100%; height:8px; }
 .modal-bg { position:fixed; inset:0; background:#0007; display:flex; align-items:center; justify-content:center; z-index:50; }
 .modal { background:var(--card); border-radius:10px; padding:16px; width:min(420px,92vw); max-height:86vh; overflow:auto; } .modal.wide { width:min(640px,94vw); }
 .modal input, .modal textarea { width:100%; }
-.ai-list { max-height:300px; overflow:auto; margin-top:8px; } .ai-row { display:flex; gap:8px; justify-content:space-between; padding:3px 0; border-bottom:1px solid var(--border); } .clip { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
+.ai-list { max-height:360px; overflow:auto; margin-top:8px; } .ai-row { display:flex; gap:8px; justify-content:space-between; align-items:flex-start; padding:4px 0; border-bottom:1px solid var(--border); } .ai-tags { display:flex; flex-wrap:wrap; gap:4px; justify-content:flex-end; max-width:58%; } .ai-pager { display:flex; gap:8px; align-items:center; margin-top:8px; } .clip { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
+.tag-filter { margin: 8px 0 4px; }
+.tag-filter-list { display:flex; flex-wrap:wrap; gap:4px 12px; max-height:132px; overflow:auto; padding:2px 0 6px; }
+.tag-filter-list label { display:flex; align-items:center; gap:4px; font-size:13px; }
+.tag .x { border:0; background:transparent; cursor:pointer; padding:0 2px; color:inherit; }
+.modal .tag-rename { width:8em; min-width:0; padding:0 4px; }
 .popup { width:340px; padding:12px; } .popup h1 { font-size:16px; margin:0 0 4px; }
 .print { max-width:800px; margin:0 auto; padding:20px; background:#fff; color:#000; } .print-item { break-inside: avoid; border-bottom:1px solid #ccc; padding:8px 0; } .print img { max-height:160px; margin-right:6px; }
 @media print { body { background:#fff; } }

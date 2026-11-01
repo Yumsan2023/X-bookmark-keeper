@@ -9,7 +9,7 @@ import { mergeSettings } from '@/shared/storage'
 
 export const FULL_BACKUP_FORMAT = 'x-toolkit-full' as const
 export const FULL_BACKUP_VERSION = 1 as const
-export const APP_VERSION = '0.7.14'
+export const APP_VERSION = '0.7.15'
 export const FULL_BACKUP_MAX_CHARS = 64_000_000
 
 const MAX_POSTS = 200_000

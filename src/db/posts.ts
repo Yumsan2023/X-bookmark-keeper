@@ -1,3 +1,4 @@
+import { mergePostTags } from '@/ai/classify'
 import type { Folder, Post, PostSource } from '@/shared/types'
 import { postSource } from '@/shared/types'
 import type { ParsedPost } from '@/api/parser'
@@ -211,6 +212,20 @@ export async function addTags(ids: string[], tags: string[]): Promise<void> {
         p.tags = [...new Set([...(p.tags ?? []), ...norm])]
       })
   })
+}
+
+/** One transaction: merge suggested tags onto each post. Does not remove existing tags. */
+export async function applyTagsToPosts(assignments: Iterable<[string, string[]]>): Promise<number> {
+  const rows = [...assignments].filter(([, tags]) => tags.some((t) => normalizeTag(t)))
+  if (!rows.length) return 0
+  await db.transaction('rw', db.posts, async () => {
+    for (const [id, tags] of rows) {
+      await db.posts.where('tweet_id').equals(id).modify((p) => {
+        p.tags = mergePostTags(p.tags, tags)
+      })
+    }
+  })
+  return rows.length
 }
 
 export async function removeTags(ids: string[], tags: string[]): Promise<void> {

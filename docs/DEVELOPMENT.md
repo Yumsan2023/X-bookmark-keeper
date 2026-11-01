@@ -51,7 +51,7 @@ x-toolkit/   # 仓库路径不变；包名 x-toolkit
 │   ├── search/             # MiniSearch、query-parser、tokenizer、highlight、service
 │   ├── export/             # json/csv/markdown/obsidian zip/batch/media（帖子摘出，不是全量备份）
 │   ├── backup/             # 一键全量备份：format x-toolkit-full，整包替换
-│   ├── ai/                 # OpenAI 兼容归类
+│   ├── ai/                 # OpenAI 兼容内容多标签（含本机 Ollama）
 │   ├── shared/             # types、storage、accounts（书签多账号，与 xsl 分开）
 │   ├── strike/             # 打击账本：pure/store、author-flags.js、内容脚本、选项 UI（打进同一个 Vite 构建）
 │   ├── library/            # 按引用原文归组（纯函数）

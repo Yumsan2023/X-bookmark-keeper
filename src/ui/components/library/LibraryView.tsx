@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { llmConfigured } from '@/ai/classify'
 import { collectAllMatching } from '@/search/service'
 import type { SortKey } from '@/search/engine'
 import type { Hit } from '@/search/engine'
@@ -18,11 +19,14 @@ import {
 import { bg, useAuthorMarks, type Library } from '../../hooks'
 import { useLang, useT, type Key } from '../../i18n'
 import { fmtDate, fmtNum } from '../../util'
+import { AiDialog } from '../AiDialog'
 import { useDialogs } from '../Dialogs'
+import { TagEditor } from '../TagEditor'
 import { ExportPanel, type ExportScope } from './ExportPanel'
 import {
   EMPTY_FILTER,
   FilterPanel,
+  TagCheckboxList,
   filterChips,
   filterStateToSearch,
   type LibraryFilterState,
@@ -98,6 +102,9 @@ export function LibraryView({
   const [total, setTotal] = useState(0)
   const [searching, setSearching] = useState(false)
   const [info, setInfo] = useState('')
+  const [tagEdit, setTagEdit] = useState<Post | null>(null)
+  const [aiOpen, setAiOpen] = useState<'selected' | 'untagged' | null>(null)
+  const [aiPosts, setAiPosts] = useState<Post[]>([])
   const [view, setView] = useState<LibView>('list')
   const [groups, setGroups] = useState<QuoteGroup[]>([])
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set())
@@ -180,6 +187,18 @@ export function LibraryView({
   const flash = (m: string) => {
     setInfo(m)
     setTimeout(() => setInfo(''), 6000)
+  }
+
+  const aiVisible = llmConfigured(settings.llm)
+  const selectedPosts = () => [...selectedCache.values()].filter((p) => selected.has(p.tweet_id))
+  const openAi = async (scope: 'selected' | 'untagged') => {
+    if (scope === 'selected') setAiPosts(selectedPosts())
+    else {
+      flash(t('ai_loading_untagged'))
+      const posts = await collectAllMatching(lib.engine, { query: 'tag:none', sort: 'saved_desc' })
+      setAiPosts(posts.filter((p) => !(p.tags?.length)))
+    }
+    setAiOpen(scope)
   }
 
   const onAuthorFlag = async (posts: Post[], flag: AuthorFlagName, value: boolean) => {
@@ -293,6 +312,11 @@ export function LibraryView({
           <button type="button" className="lib-tool" title={t('export')} onClick={() => setExportOpen(true)}>
             ↓
           </button>
+          {aiVisible && selected.size === 0 && (
+            <button type="button" className="lib-tool" title={t('ai_classify')} onClick={() => void openAi('untagged')}>
+              ✨ {t('ai_scope_untagged')}
+            </button>
+          )}
           <button
             type="button"
             className="lib-tool"
@@ -363,6 +387,11 @@ export function LibraryView({
             <button type="button" onClick={() => void onAuthorFlag([...selectedCache.values()], 'spam', false)}>
               {t('unmark_spam')}
             </button>
+            {aiVisible && (
+              <button type="button" onClick={() => void openAi('selected')}>
+                ✨ {t('ai_classify')}
+              </button>
+            )}
             <button type="button" onClick={() => setSelected(new Set())}>
               {t('clear_selection')}
             </button>
@@ -398,6 +427,12 @@ export function LibraryView({
           )}
         </div>
       </div>
+
+      <TagCheckboxList
+        tags={lib.tags}
+        checked={filter.tags}
+        onChange={(tags) => setFilter((cur) => ({ ...cur, tags }))}
+      />
 
       {chips.length > 0 && (
         <div className="filter-chips-bar" role="list">
@@ -565,6 +600,13 @@ export function LibraryView({
                           {p.text?.slice(0, 160) || '(empty)'}
                           {p.text && p.text.length > 160 ? '…' : ''}
                         </a>
+                        {(p.tags?.length ?? 0) > 0 && (
+                          <div className="tags">
+                            {p.tags.map((tg) => (
+                              <span key={tg} className="tag">#{tg}</span>
+                            ))}
+                          </div>
+                        )}
                       </td>
                     )}
                     {show('media') && (
@@ -591,6 +633,14 @@ export function LibraryView({
                     {show('created_at') && <td className="lib-date">{fmtDate(p.created_at, lang)}</td>}
                     <td className="lib-actions">
                       <AuthorMarkButtons post={p} lookup={authorMarks.lookup} onToggle={(post, flag, value) => void onAuthorFlag([post], flag, value)} />
+                      <button
+                        type="button"
+                        className="lib-row-action"
+                        title={t('edit_tags')}
+                        onClick={() => setTagEdit(p)}
+                      >
+                        🏷
+                      </button>
                       <button
                         type="button"
                         className="lib-row-action danger"
@@ -721,6 +771,24 @@ export function LibraryView({
         </span>
       </footer>
 
+      {tagEdit && (
+        <TagEditor
+          post={hits.find((h) => h.post.tweet_id === tagEdit.tweet_id)?.post ?? selectedCache.get(tagEdit.tweet_id) ?? tagEdit}
+          allTags={lib.tags.map((x) => x.tag)}
+          onClose={() => setTagEdit(null)}
+          onChanged={() => void lib.reload()}
+        />
+      )}
+      {aiOpen && (
+        <AiDialog
+          settings={settings}
+          posts={aiPosts}
+          scopeLabel={aiOpen === 'selected' ? t('ai_scope_selected') : t('ai_scope_untagged')}
+          knownTags={lib.tags.map((x) => x.tag)}
+          onClose={() => setAiOpen(null)}
+          onApplied={() => void lib.reload()}
+        />
+      )}
       <FilterPanel
         open={filterOpen}
         value={filter}

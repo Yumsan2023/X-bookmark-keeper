@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { NO_FOLDER, parseDateToken, parseQuery, splitTokens } from '@/search/query-parser'
+import { NO_FOLDER, NO_TAG, parseDateToken, parseQuery, splitTokens } from '@/search/query-parser'
 
 describe('splitTokens', () => {
   it('keeps quoted segments', () => {
@@ -29,6 +29,11 @@ describe('parseQuery', () => {
     const q = parseQuery('机器学习 folder:none')
     expect(q.terms).toEqual(['机器学习'])
     expect(q.folders).toEqual([NO_FOLDER])
+  })
+  it('tag:none marks untagged and keeps other tag: tokens for AND', () => {
+    expect(parseQuery('tag:none').tags).toEqual([NO_TAG])
+    expect(parseQuery('tag:无标签').tags).toEqual([NO_TAG])
+    expect(parseQuery('tag:#人工智能 tag:Rust').tags).toEqual(['人工智能', 'Rust'])
   })
   it('collects warnings for bad values', () => {
     const q = parseQuery('since:yesterday has:audio is:weird')

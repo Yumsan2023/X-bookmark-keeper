@@ -95,8 +95,16 @@ describe('SearchEngine', () => {
     expect(ids('has:media').sort()).toEqual(['b', 'd'])
     expect(ids('tag:rust').sort()).toEqual(['a', 'e'])
     expect(ids('tag:rust tag:todo')).toEqual(['a'])
+    expect(ids('tag:none').sort()).toEqual(['b', 'c', 'd'])
     expect(ids('is:deleted')).toEqual(['e'])
     expect(ids('rust folder:Dev has:link from:rustfan')).toEqual(['a'])
+  })
+  it('checkbox tags are OR and query tag: stays AND', () => {
+    expect(ids('', { query: '', filters: { anyTags: ['rust', 'todo'] } }).sort()).toEqual(['a', 'e'])
+    expect(ids('', { query: '', filters: { anyTags: ['todo'] } })).toEqual(['a'])
+    expect(ids('', { query: '', filters: { anyTags: ['missing', 'rust'] } }).sort()).toEqual(['a', 'e'])
+    expect(ids('tag:rust', { query: 'tag:rust', filters: { anyTags: ['todo'] } })).toEqual(['a'])
+    expect(ids('tag:rust tag:todo', { query: 'tag:rust tag:todo', filters: { anyTags: ['rust'] } })).toEqual(['a'])
   })
   it('structured filters AND with query operators', () => {
     expect(ids('rust', { query: '', filters: { tags: ['todo'] } })).toEqual(['a'])
