@@ -1,8 +1,10 @@
 import { send } from "../lib/client.js";
-import { parseArticle } from "../lib/domparse.js";
+import { articleSurface, isNestedTweetArticle, parseArticle, TWEET_ARTICLE_SELECTOR } from "../lib/domparse.js";
 import { loadDict, translate } from "../lib/i18n.js";
 import {
   canonicalTag,
+  commentScanDecision,
+  commentStrikePlatform,
   contentHash,
   distillSuggestion,
   eventMatchesShortcut,
@@ -52,12 +54,14 @@ function pageContext() {
 }
 
 function describe(article) {
-  const parsed = parseArticle(article, pageContext());
+  const ctx = pageContext();
+  const parsed = parseArticle(article, ctx);
   if (!parsed) return null;
   if (!parsed.tweetId) {
     parsed.tweetId = `t${contentHash([parsed.handle, parsed.text]).slice(0, 18)}`;
     parsed.synthetic = true;
   }
+  parsed.surface = articleSurface(ctx.pathname, parsed.synthetic ? "" : parsed.tweetId);
   parsed.key = parsed.tweetId;
   return parsed;
 }
@@ -146,7 +150,7 @@ function syncNameHost(article, model) {
   mountInline(host, model, { onChip: () => openTags(article) });
 }
 
-function placeholder(article, meta, record) {
+function placeholder(article, meta, record, kind, onSuspect) {
   let node = article.querySelector(":scope > [data-xsl-placeholder]");
   if (!node) {
     node = document.createElement("div");
@@ -156,13 +160,13 @@ function placeholder(article, meta, record) {
   }
   const chrome = chromeFor(meta, record);
   const bits = chrome.chips.map((chip) => chip.text);
-  const signature = `${lang}|${meta.handle}|${chrome.protect?.text || ""}|${bits.join(",")}`;
+  const signature = `${lang}|${kind}|${meta.handle}|${chrome.protect?.text || ""}|${bits.join(",")}`;
   if (node.dataset.sig === signature) return;
   node.dataset.sig = signature;
   node.replaceChildren();
   const title = document.createElement("div");
   title.className = "xsl-ph-title";
-  title.textContent = t("collapsed", { handle: meta.handle });
+  title.textContent = kind === "comment" ? t("commentFolded", { handle: meta.handle }) : t("collapsed", { handle: meta.handle });
   if (chrome.protect) {
     const badge = document.createElement("span");
     badge.className = "xsl-protect";
@@ -172,7 +176,7 @@ function placeholder(article, meta, record) {
   }
   const detail = document.createElement("div");
   detail.className = "xsl-ph-meta";
-  detail.textContent = bits.join(" · ") || t("hiddenOn");
+  detail.textContent = kind === "comment" ? t("commentFoldMeta") : (bits.join(" · ") || t("hiddenOn"));
   const show = document.createElement("button");
   show.type = "button";
   show.textContent = t("showOnce");
@@ -182,35 +186,76 @@ function placeholder(article, meta, record) {
     delete article.dataset.xslCollapsed;
     node.remove();
   });
-  const unhide = document.createElement("button");
-  unhide.type = "button";
-  unhide.textContent = t("unhide");
-  unhide.addEventListener("click", async (event) => {
-    stop(event);
-    await send({ type: "SET_HIDDEN", userId: meta.userId, handle: meta.handle, hidden: false });
-    toast(overlay, t("hiddenSaved"));
-  });
-  for (const button of [show, unhide]) {
-    button.addEventListener("pointerdown", stop);
+  const buttons = [show];
+  if (kind === "comment") {
+    const suspect = document.createElement("button");
+    suspect.type = "button";
+    suspect.className = "xsl-suspect";
+    suspect.textContent = t("suspect");
+    suspect.title = t("commentSuspectTitle");
+    suspect.addEventListener("click", (event) => {
+      stop(event);
+      onSuspect?.();
+    });
+    buttons.push(suspect);
+  } else {
+    const unhide = document.createElement("button");
+    unhide.type = "button";
+    unhide.textContent = t("unhide");
+    unhide.addEventListener("click", async (event) => {
+      stop(event);
+      await send({ type: "SET_HIDDEN", userId: meta.userId, handle: meta.handle, hidden: false });
+      toast(overlay, t("hiddenSaved"));
+    });
+    buttons.push(unhide);
   }
-  node.append(title, detail, show, unhide);
+  for (const button of buttons) button.addEventListener("pointerdown", stop);
+  node.append(title, detail, ...buttons);
 }
 
-function syncHidden(article, meta) {
+function followOf(meta, record) {
+  if (meta?.followed === true || meta?.followed === false) return meta.followed;
+  if (record?.followed === true || record?.followed === false) return record.followed;
+  return null;
+}
+
+function commentDecision(meta, matched) {
+  const settings = snapshot?.settings || {};
+  const record = meta ? indexOf(meta.userId) : null;
+  return commentScanDecision({
+    surface: meta?.surface,
+    enabled: settings.commentScanEnabled === true,
+    mode: settings.commentHitMode,
+    matched: !!matched?.suspect,
+    whitelist: !!record?.whitelist,
+    followed: followOf(meta, record),
+  });
+}
+
+function syncHidden(article, meta, matched) {
   const record = indexOf(meta.userId);
-  const hide = !!(record && record.hidden) && !expanded.has(meta.key);
+  const accountHide = !!(record && record.hidden);
+  const decision = commentDecision(meta, matched);
+  const replyFold = !accountHide && decision.fold;
+  const hide = (accountHide || replyFold) && !expanded.has(meta.key);
   if (hide) {
     article.dataset.xslCollapsed = "1";
-    placeholder(article, meta, record);
+    placeholder(article, meta, record, replyFold ? "comment" : "account", () => confirmRule(article));
   } else if (article.dataset.xslCollapsed) {
     delete article.dataset.xslCollapsed;
     article.querySelector(":scope > [data-xsl-placeholder]")?.remove();
   }
 }
 
-function suspectFor(meta) {
+function keywordScanOn(meta) {
   const settings = snapshot?.settings;
-  if (!settings?.rulesEnabled) return null;
+  if (meta?.surface === "reply") return settings?.commentScanEnabled === true;
+  return !!settings?.rulesEnabled;
+}
+
+function suspectFor(meta) {
+  if (!keywordScanOn(meta)) return null;
+  const settings = snapshot?.settings;
   const matched = matchRules(settings.keywordPacks, { text: meta.text, handle: meta.handle, bio: meta.bio });
   if (!matched.suspect) return null;
   return matched;
@@ -274,8 +319,9 @@ async function withOverlay(task) {
   }
 }
 
-async function afterThreshold(result, meta) {
-  const threshold = result.threshold;
+async function afterThreshold(result, meta, source) {
+  const gated = commentStrikePlatform(result.threshold, meta?.surface, source);
+  const threshold = gated.threshold;
   if (!threshold?.crossed) return;
   const tag = tagLabel(threshold.tag, lang);
   if (threshold.skipped === "whitelist") {
@@ -284,52 +330,61 @@ async function afterThreshold(result, meta) {
   }
   if (threshold.mode === "prompt-only") {
     toast(overlay, t("promptOnly", { handle: meta.handle, tag, count: threshold.count, n: threshold.n }));
+    if (gated.commentSignal) toast(overlay, t("commentNoQueue"));
     return;
   }
   if (threshold.mode === "auto") {
-    const applied = await send({
-      type: "APPLY_ACTIONS",
-      userId: meta.userId,
-      handle: meta.handle,
-      hide: threshold.suggest.hide,
-      mute: threshold.suggest.mute,
-      block: threshold.suggest.block,
-      reason: "threshold-auto",
-    });
-    const actions = (applied.done || []).map((name) => {
-      if (name === "hide") return t("hideAction");
-      if (name === "mute") return t("muteQueued");
-      if (name === "block") return t("blockQueued");
-      return t(name);
-    }).join(lang === "zh" ? "、" : ", ");
-    toast(overlay, t("autoDone", { handle: meta.handle, actions: actions || t("justRecord") }));
-    if ((applied.done || []).some((name) => name === "mute" || name === "block")) pump();
+    const hide = !!threshold.suggest.hide;
+    const mute = !!threshold.suggest.mute;
+    const block = !!threshold.suggest.block;
+    if (hide || mute || block) {
+      const applied = await send({
+        type: "APPLY_ACTIONS",
+        userId: meta.userId,
+        handle: meta.handle,
+        hide,
+        mute,
+        block,
+        reason: "threshold-auto",
+      });
+      const actions = (applied.done || []).map((name) => {
+        if (name === "hide") return t("hideAction");
+        if (name === "mute") return t("muteQueued");
+        if (name === "block") return t("blockQueued");
+        return t(name);
+      }).join(lang === "zh" ? "、" : ", ");
+      toast(overlay, t("autoDone", { handle: meta.handle, actions: actions || t("justRecord") }));
+      if ((applied.done || []).some((name) => name === "mute" || name === "block")) pump();
+    } else {
+      toast(overlay, t("autoDone", { handle: meta.handle, actions: t("justRecord") }));
+    }
+    if (gated.commentSignal) toast(overlay, t("commentNoQueue"));
     return;
   }
   const settings = snapshot?.settings || {};
+  const warnings = [];
+  if (threshold.followed === true) warnings.push(t("thresholdWarnFollow"));
+  else if (threshold.followed == null) warnings.push(t("thresholdWarnUnknown"));
+  if (gated.commentSignal) warnings.push(t("commentNoQueue"));
   const choice = await withOverlay(() => openChoice(overlay, {
     title: t("thresholdTitle", { tag }),
     body: t("thresholdBody", { handle: meta.handle, tag, count: threshold.count, n: threshold.n }),
-    warning: threshold.followed === true
-      ? t("thresholdWarnFollow")
-      : threshold.followed == null
-        ? t("thresholdWarnUnknown")
-        : "",
+    warning: warnings.join(" "),
     checks: [
       { id: "hide", label: t("hideLocal"), checked: !!threshold.suggest.hide, hint: "" },
       {
         id: "mute",
         label: t("mute"),
         checked: !!threshold.suggest.mute,
-        disabled: !settings.enablePlatformActions,
-        hint: t("muteHint"),
+        disabled: !settings.enablePlatformActions || gated.commentSignal,
+        hint: gated.commentSignal ? t("commentNoQueue") : t("muteHint"),
       },
       {
         id: "block",
         label: t("block"),
         checked: !!threshold.suggest.block,
-        disabled: !settings.enablePlatformActions,
-        hint: t("blockHint"),
+        disabled: !settings.enablePlatformActions || gated.commentSignal,
+        hint: gated.commentSignal ? t("commentNoQueue") : t("blockHint"),
       },
     ],
     confirm: t("actConfirm"),
@@ -380,7 +435,7 @@ async function markTag(meta, tag, source) {
   }
   const count = result.account?.tags?.find((row) => row.name === clean)?.count || result.threshold?.count || 1;
   toast(overlay, t("marked", { handle: meta.handle, tag: tagLabel(clean, lang), count }));
-  await afterThreshold(result, meta);
+  await afterThreshold(result, meta, source);
 }
 
 async function toggleTag(meta, tag) {
@@ -657,14 +712,16 @@ function render(article, meta) {
   syncNameHost(article, chrome);
   article.dataset.xslHandle = meta.handle.toLowerCase();
   article.dataset.xslUser = meta.userId;
-  syncHidden(article, meta);
+  article.dataset.xslSurface = meta.surface || "";
+  syncHidden(article, meta, matched);
   rememberFollow(meta);
 }
 
 function scan() {
   if (!document.body) return;
-  const articles = document.querySelectorAll('article[data-testid="tweet"], article[role="article"]');
+  const articles = document.querySelectorAll(TWEET_ARTICLE_SELECTOR);
   for (const article of articles) {
+    if (isNestedTweetArticle(article)) continue;
     const meta = describe(article);
     if (!meta) continue;
     render(article, meta);
@@ -682,13 +739,14 @@ function ourMutation(record) {
 }
 
 function activeArticle() {
-  const focused = document.activeElement?.closest?.('article[data-testid="tweet"], article[role="article"]');
-  if (focused) return focused;
-  if (hovered && document.contains(hovered)) return hovered;
+  const focused = document.activeElement?.closest?.(TWEET_ARTICLE_SELECTOR);
+  if (focused && !isNestedTweetArticle(focused)) return focused;
+  if (hovered && document.contains(hovered) && !isNestedTweetArticle(hovered)) return hovered;
   const mid = window.innerHeight / 2;
   let best = null;
   let distance = Infinity;
-  for (const article of document.querySelectorAll('article[data-testid="tweet"]')) {
+  for (const article of document.querySelectorAll(TWEET_ARTICLE_SELECTOR)) {
+    if (isNestedTweetArticle(article)) continue;
     const rect = article.getBoundingClientRect();
     if (rect.bottom < 0 || rect.top > window.innerHeight) continue;
     const delta = Math.abs(rect.top + rect.height / 2 - mid);
@@ -828,12 +886,12 @@ export async function start() {
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
   document.addEventListener("mouseover", (event) => {
-    const article = event.target?.closest?.('article[data-testid="tweet"], article[role="article"]');
-    if (article) hovered = article;
+    const article = event.target?.closest?.(TWEET_ARTICLE_SELECTOR);
+    if (article && !isNestedTweetArticle(article)) hovered = article;
   }, true);
   document.addEventListener("focusin", (event) => {
-    const article = event.target?.closest?.('article[data-testid="tweet"], article[role="article"]');
-    if (article) hovered = article;
+    const article = event.target?.closest?.(TWEET_ARTICLE_SELECTOR);
+    if (article && !isNestedTweetArticle(article)) hovered = article;
   }, true);
   document.addEventListener("keydown", onKey, true);
   window.addEventListener("popstate", schedule);

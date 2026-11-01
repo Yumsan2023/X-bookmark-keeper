@@ -1,6 +1,6 @@
 # X Toolkit — X (Twitter) 书签管家 + 打击账本 (Chrome MV3 扩展)
 
-**当前版本: 0.7.6** — 一个扩展同时包含书签库与打击账本 / Strike Ledger。本产品此前名为 Bookmark Keeper；本地书签库 IndexedDB 名仍是 `bookmark-keeper`，旧库可直接升级。0.7.1 给打击账本加上静音/屏蔽队列和限流面板。0.7.2 可以编辑关键词包（含文本导入导出），并从帖子把选中的词加进词库；命中只出黄标，不自动记一笔。0.7.3 在可选 BYOK 建议为垃圾或营销时，经你确认后把抽出的短词写入一个词库；仍然不自动记一笔。0.7.4 在时间线上用保护徽章和标签芯片标出已关注/白名单账号，以及已有的打击次数；点芯片只打开标记，不会自动静音或屏蔽。0.7.5 把「已关注」改成软保护：关键词和黄标仍不会自动入队，但你手动把某个标签记满自己设的阈值后，仍按自动/确认/仅提示静音或屏蔽；白名单仍是硬保护，不会自动入队。0.7.6 把作者级「常营销 / 常垃圾」标到同一份打击账本上，书签库给这个作者已有和以后同步的帖子显示芯片；默认不记一笔，也不静音或屏蔽。
+**当前版本: 0.7.7** — 一个扩展同时包含书签库与打击账本 / Strike Ledger。本产品此前名为 Bookmark Keeper；本地书签库 IndexedDB 名仍是 `bookmark-keeper`，旧库可直接升级。0.7.1 给打击账本加上静音/屏蔽队列和限流面板。0.7.2 可以编辑关键词包（含文本导入导出），并从帖子把选中的词加进词库；命中只出黄标，不自动记一笔。0.7.3 在可选 BYOK 建议为垃圾或营销时，经你确认后把抽出的短词写入一个词库；仍然不自动记一笔。0.7.4 在时间线上用保护徽章和标签芯片标出已关注/白名单账号，以及已有的打击次数；点芯片只打开标记，不会自动静音或屏蔽。0.7.5 把「已关注」改成软保护：关键词和黄标仍不会自动入队，但你手动把某个标签记满自己设的阈值后，仍按自动/确认/仅提示静音或屏蔽；白名单仍是硬保护，不会自动入队。0.7.6 把作者级「常营销 / 常垃圾」标到同一份打击账本上，书签库给这个作者已有和以后同步的帖子显示芯片；默认不记一笔，也不静音或屏蔽。0.7.7 在推文详情的回复区单独扫描关键词：默认关闭；打开后默认折叠命中的那一条回复或只提示，不会因评论命中自动静音或屏蔽。
 
 在 x.com 时间线上标记垃圾/营销的账本与书签同步共用一个工具栏图标。请卸载单独安装的 X Strike Ledger，否则两个内容脚本会同时注入。
 
@@ -11,7 +11,7 @@
 <details>
 <summary><strong>English summary</strong></summary>
 
-Chrome MV3 extension **X Toolkit**. It syncs X **bookmarks** and optional public **UserTweets** into local IndexedDB, and adds a local **Strike Ledger**: mark Spam / Marketing on the x.com timeline, then hide locally or (only if you turn it on) mute/block through X’s own menu. v0.7.1 queues mute/block (jitter of about 1s+, a daily cap, backoff, pause/resume). v0.7.2 adds editable keyword packs (including plain-text import/export) and **Add selection to keyword pack** from a tweet’s Mark menu or the right-click menu. A keyword hit still only shows the yellow Suspect chip and never adds a strike. v0.7.3 can distill one BYOK spam/marketing suggestion into short keyword rules after you confirm; that save does not add a strike and does not call the model again. v0.7.4 paints a Protected badge on accounts you follow or whitelist, and compact tag chips such as Spam×2 beside the name and in the strike row. Clicking a chip opens Mark and does not enqueue mute or block. v0.7.5 makes following a soft protect: a keyword hit, the yellow Suspect chip, or an AI suggestion alone still does not auto-queue mute or block, and unknown follow state stays conservative. After you confirm enough strikes to reach your per-tag threshold, mute/block follows the same automatic / confirm / prompt-only mode as any other account. Whitelist stays a hard protect and is never auto-queued. v0.7.6 stores author-level marketing and spam flags on that same ledger (`xsl`, `ledger[userId].authorFlags`). The bookmark library reads them and shows a marketing-prone or spam-prone chip on existing and future posts. Marking an author from the library does not add a strike unless you turn that on, and it never queues mute or block. Search with `author:marketing` or `strike:spam`. The Mark sheet can still queue mute or block for someone you follow. The green badge stays **已关注保护** / **Protected**. Storage keys stay `bk_*` and `xsl` / `xslSecret`. Unload a standalone Strike Ledger install so the page is not injected twice. Mute and block stay off until you enable them. **Not verified against real X accounts** in this repo; unit tests + Mock-X e2e only. May violate X ToS; use at your own risk. MIT License.
+Chrome MV3 extension **X Toolkit**. It syncs X **bookmarks** and optional public **UserTweets** into local IndexedDB, and adds a local **Strike Ledger**: mark Spam / Marketing on the x.com timeline, then hide locally or (only if you turn it on) mute/block through X’s own menu. v0.7.1 queues mute/block (jitter of about 1s+, a daily cap, backoff, pause/resume). v0.7.2 adds editable keyword packs (including plain-text import/export) and **Add selection to keyword pack** from a tweet’s Mark menu or the right-click menu. A keyword hit still only shows the yellow Suspect chip and never adds a strike. v0.7.3 can distill one BYOK spam/marketing suggestion into short keyword rules after you confirm; that save does not add a strike and does not call the model again. v0.7.4 paints a Protected badge on accounts you follow or whitelist, and compact tag chips such as Spam×2 beside the name and in the strike row. Clicking a chip opens Mark and does not enqueue mute or block. v0.7.5 makes following a soft protect: a keyword hit, the yellow Suspect chip, or an AI suggestion alone still does not auto-queue mute or block, and unknown follow state stays conservative. After you confirm enough strikes to reach your per-tag threshold, mute/block follows the same automatic / confirm / prompt-only mode as any other account. Whitelist stays a hard protect and is never auto-queued. v0.7.6 stores author-level marketing and spam flags on that same ledger (`xsl`, `ledger[userId].authorFlags`). The bookmark library reads them and shows a marketing-prone or spam-prone chip on existing and future posts. Marking an author from the library does not add a strike unless you turn that on, and it never queues mute or block. Search with `author:marketing` or `strike:spam`. The Mark sheet can still queue mute or block for someone you follow. The green badge stays **已关注保护** / **Protected**. v0.7.7 scans replies on a tweet detail page with the same keyword packs. Comment scanning is its own switch and is off by default. A hit paints the yellow Suspect chip and, by default, folds that one reply; you can switch it to prompt only. A comment hit never auto-queues mute or block. Whitelist is not folded. Accounts you follow are not auto-folded and are not auto-queued. Confirming the chip can add a strike. Mute and block still queue only from the Mark sheet, through X's own menu. Storage keys stay `bk_*` and `xsl` / `xslSecret`. Unload a standalone Strike Ledger install so the page is not injected twice. Mute and block stay off until you enable them. **Not verified against real X accounts** in this repo; unit tests + Mock-X e2e only. May violate X ToS; use at your own risk. MIT License.
 
 Step-by-step: [docs/USAGE.md](./docs/USAGE.md) · Develop: [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md) · Contribute: [CONTRIBUTING.md](./CONTRIBUTING.md)
 
@@ -76,6 +76,7 @@ Step-by-step: [docs/USAGE.md](./docs/USAGE.md) · Develop: [docs/DEVELOPMENT.md]
 | 保护徽章 + 标签芯片（0.7.4）：已关注/白名单在时间线上显示保护徽章；已有标签显示成「垃圾×2」。点芯片打开标记 | ✅ 展示模型单测；**真实时间线注入未验证** |
 | 已关注软保护（0.7.5）：关键词/黄标/AI 建议仍不自动入队；你手动记满阈值后按自动/确认/仅提示处理。白名单仍不自动入队。标记面板的排队静音/屏蔽对已关注账号可用 | ✅ 队列策略单测；**真实时间线注入未验证** |
 | 书签库作者芯片（0.7.6）：常营销 / 常垃圾写在打击账本 `xsl` 的作者上。次数达到书签芯片阈值，或你在书签/时间线上手动标作者，已有和以后的书签都显示芯片。默认不记一笔、不静音、不屏蔽。搜索 `author:marketing` / `strike:spam` | ✅ 纯逻辑单测；**真实时间线与真实书签同步未验证** |
+| 评论区扫描（0.7.7）：推文详情页的回复单独开关。沿用关键词包和黄色「可疑」，可确认记一笔。默认关闭；打开后默认折叠这一条或只提示。评论命中不自动静音/屏蔽。白名单不折叠，已关注不自动折叠也不自动入队。排队仍走标记里的 X 菜单 | ✅ 纯逻辑单测；**真实详情页注入未验证** |
 
 ---
 
@@ -219,7 +220,19 @@ AI 建议默认关闭。密钥仍只在 `xslSecret`，不进词库，也不进�
 
 重新构建并加载 `dist/`（版本 0.7.6）。这条联动有单测；**没有**在真实 X 账号上验证过。
 
-发布包 `x-toolkit-0.7.6-chrome.zip` 的根目录就是可「加载已解压的扩展程序」的文件夹，内含 `manifest.json`（版本 0.7.6）。本地重新打包：`npm run build`，再把 `dist/` 里的文件（不要多套一层 `dist/` 目录）打成 zip。
+### 评论区扫描（0.7.7）
+
+时间线上的关键词预标不动。推文详情页（`/{handle}/status/{id}`，以及 `/i/status/`、`/i/web/status/` 和图片/视频查看）里，主帖仍走时间线规则；其余 `article[data-testid="tweet"]` 回复只有在单独打开「扫描评论区回复」后才做关键词扫描。内容脚本本来就会注入这些页面，不新增 GraphQL。
+
+- **默认关闭**。选项页 **打击账本 → 评论区** 打开后才扫描回复。和时间线的「启用关键词预标」分开：只开时间线时，回复不出黄标、也不折叠；只开评论区时，时间线不预标。
+- **黄色「可疑」**。命中的是现有关键词包。点黄标可以确认记一笔。不点就不记。
+- **默认折叠这一条**。只藏这一条回复，不把整个账号标成隐藏，不静音，不屏蔽。占位条上可以「显示这条」，或再点黄标确认记一笔。改成「只出黄标，等你确认」则不折叠。
+- **不自动入队**。评论里的关键词、黄标、以及从黄标或 AI 芯片确认的那一笔记账，都不会把静音或屏蔽放进队列。关注状态未知同样不会自动静音或屏蔽。要入队，仍在「标记」里点「排队静音 / 排队屏蔽」，由打开的时间线去点 X 自己的菜单。
+- **保护**。白名单是硬保护：不折叠。已关注是软保护：不自动折叠，也不自动入队；黄标还在，你可以确认记一笔。AI 建议仍只在你本来就打开 BYOK 时出现，自动询问也只对已经是黄标的回复、并且你打开了那个开关时才会问。
+
+重新构建并加载 `dist/`（版本 0.7.7）。这条策略有单测；**没有**在真实 X 账号上验证过。
+
+发布包 `x-toolkit-0.7.7-chrome.zip` 的根目录就是可「加载已解压的扩展程序」的文件夹，内含 `manifest.json`（版本 0.7.7）。本地重新打包：`npm run build`，再把 `dist/` 里的文件（不要多套一层 `dist/` 目录）打成 zip。
 
 ---
 

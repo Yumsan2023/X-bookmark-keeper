@@ -6,6 +6,9 @@
  * setAuthorFlag may call applyMark when bookmarkMarkAddsStrike is on, and
  * never enqueues mute or block. Author flags live on ledger[userId].authorFlags
  * inside chrome.storage.local `xsl` (see author-flags.js).
+ * Comment-area hits (commentScanDecision) never enqueue mute or block.
+ * A confirmed reply strike still does not auto-queue; commentStrikePlatform
+ * strips mute/block from that threshold. The Mark sheet remains the queue path.
  */
 
 import {
@@ -148,6 +151,78 @@ export function autoPlatformAllowed(settings, account, kind, trigger = "threshol
   if (kind === "mute") return !!settings.muteOnThreshold;
   if (kind === "block") return !!settings.blockOnThreshold;
   return false;
+}
+
+/**
+ * What to do with one card when comment-area scanning is involved.
+ * Timeline cards and the focal status tweet are not comment-scan targets.
+ * A keyword hit on a reply never queues mute or block (`queueMute` / `queueBlock`
+ * are always false). Folding is local to that reply and does not add a strike.
+ *
+ * - enabled off, or surface other than "reply": inactive
+ * - whitelist: hard protect — yellow chip only, no fold
+ * - followed === true: soft protect — chip only, no fold, no queue
+ * - mode "prompt": chip only, user may confirm a strike
+ * - mode "fold" (default): collapse that reply. Unknown follow state may fold;
+ *   it still must not mute or block.
+ *
+ * @param {{ surface?: string, enabled?: boolean, mode?: string, matched?: boolean, whitelist?: boolean, followed?: boolean | null }} [input]
+ */
+export function commentScanDecision(input = {}) {
+  const idle = {
+    active: false,
+    suspect: false,
+    fold: false,
+    prompt: false,
+    confirmStrike: false,
+    queueMute: false,
+    queueBlock: false,
+  };
+  if (input.surface !== "reply" || input.enabled !== true) return idle;
+  const decision = {
+    active: true,
+    suspect: false,
+    fold: false,
+    prompt: false,
+    confirmStrike: false,
+    queueMute: false,
+    queueBlock: false,
+  };
+  if (!input.matched) return decision;
+  decision.suspect = true;
+  decision.confirmStrike = true;
+  if (input.whitelist || input.followed === true || input.mode === "prompt") {
+    decision.prompt = true;
+    return decision;
+  }
+  decision.fold = true;
+  return decision;
+}
+
+/**
+ * Threshold payload after a strike that started from a reply's yellow chip
+ * or AI confirm. Mute and block are cleared so a comment hit cannot auto-queue.
+ * An explicit Mark (`user` / `shortcut`) keeps the normal threshold suggestions.
+ * The Mark sheet's queue buttons do not go through this helper.
+ * @param {{ suggest?: { hide?: boolean, mute?: boolean, block?: boolean } } | null | undefined} threshold
+ * @param {string} [surface]
+ * @param {string} [source]
+ * @returns {{ threshold: { suggest?: { hide?: boolean, mute?: boolean, block?: boolean } } | null, commentSignal: boolean, blockedQueue: boolean }}
+ */
+export function commentStrikePlatform(threshold, surface, source) {
+  const commentSignal = surface === "reply" && (source === "rule" || source === "ai");
+  if (!commentSignal || !threshold) {
+    return { threshold: threshold || null, commentSignal: false, blockedQueue: false };
+  }
+  const suggest = { ...(threshold.suggest || {}) };
+  const blockedQueue = !!(suggest.mute || suggest.block);
+  suggest.mute = false;
+  suggest.block = false;
+  return {
+    threshold: { ...threshold, suggest },
+    commentSignal: true,
+    blockedQueue,
+  };
 }
 
 /** How many tag chips to paint before a “+N” overflow chip. */
@@ -344,6 +419,10 @@ export function defaultSettings() {
     rateLimitMs: 1200,
     rulesEnabled: true,
     hitHistory: false,
+    /** Status-page replies only. Independent of rulesEnabled. Off until turned on. */
+    commentScanEnabled: false,
+    /** "fold" collapses the matching reply. "prompt" leaves the yellow chip. Never auto mute/block. */
+    commentHitMode: "fold",
     ai: {
       enabled: false,
       autoSuggestSuspects: false,
@@ -1212,9 +1291,10 @@ export function sanitizeSettings(prev, patch) {
   if (src.language === "auto" || src.language === "zh" || src.language === "en") base.language = src.language;
   if (src.defaultThreshold != null) base.defaultThreshold = clampInt(src.defaultThreshold, 1, 99, base.defaultThreshold);
   if (src.actionMode === "auto" || src.actionMode === "confirm" || src.actionMode === "prompt-only") base.actionMode = src.actionMode;
-  for (const key of ["hideOnThreshold", "muteOnThreshold", "blockOnThreshold", "enablePlatformActions", "rulesEnabled", "hitHistory"]) {
+  for (const key of ["hideOnThreshold", "muteOnThreshold", "blockOnThreshold", "enablePlatformActions", "rulesEnabled", "hitHistory", "commentScanEnabled"]) {
     if (typeof src[key] === "boolean") base[key] = src[key];
   }
+  if (src.commentHitMode === "fold" || src.commentHitMode === "prompt") base.commentHitMode = src.commentHitMode;
   if (src.dailyCap != null) base.dailyCap = clampInt(src.dailyCap, 1, 500, base.dailyCap);
   if (src.rateLimitMs != null) base.rateLimitMs = clampInt(src.rateLimitMs, 1000, 10000, base.rateLimitMs);
   if (typeof src.libraryChipFromStrikes === "boolean") base.libraryChipFromStrikes = src.libraryChipFromStrikes;

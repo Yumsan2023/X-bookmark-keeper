@@ -34,7 +34,8 @@
   color-scheme: dark !important;
 }
 
-article[data-testid="tweet"][data-xsl-collapsed="1"] > :not([data-xsl-keep]) {
+article[data-testid="tweet"][data-xsl-collapsed="1"] > :not([data-xsl-keep]),
+article[role="article"][data-xsl-collapsed="1"] > :not([data-xsl-keep]) {
   display: none !important;
 }
 
@@ -83,4 +84,10 @@ article[data-testid="tweet"][data-xsl-collapsed="1"] > :not([data-xsl-keep]) {
 
 [data-xsl-placeholder] button:hover {
   background: #3d4348 !important;
+}
+
+[data-xsl-placeholder] button.xsl-suspect {
+  background: #f0c94d !important;
+  color: #3a2d05 !important;
+  font-weight: 700 !important;
 }
