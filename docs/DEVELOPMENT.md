@@ -52,7 +52,7 @@ x-toolkit/   # 仓库路径不变；包名 x-toolkit
 │   ├── export/             # json/csv/markdown/obsidian zip/batch/media
 │   ├── ai/                 # OpenAI 兼容归类
 │   ├── shared/             # types、storage、accounts（书签多账号，与 xsl 分开）
-│   ├── strike/             # 打击账本：pure/store、内容脚本、选项 UI（打进同一个 Vite 构建）
+│   ├── strike/             # 打击账本：pure/store、author-flags.js、内容脚本、选项 UI（打进同一个 Vite 构建）
 │   ├── library/            # 按引用原文归组（纯函数）
 │   └── ui/                 # React：options / sidepanel / popup / print
 │       └── components/library/  # v0.4 列表页 LibraryView + Filter/Export 面板
@@ -78,7 +78,8 @@ x-toolkit/   # 仓库路径不变；包名 x-toolkit
 3. **features**：400「features cannot be null」时自动补 `false` 并记住。  
 4. **书签 vs 发帖**：`Post.source` 为 `bookmark` | `timeline`；时间线进 `timeline:@handle`；已是书签的 id 不降级。  
 5. **大库**：UI 禁止 `toArray()` 全表开机；空查询走 Dexie 分页；全文优先持久化 MiniSearch，否则 idle 分批建索引。 列表页（`LibraryView`）同样只走 `lib.search` / `collectAllMatching`，禁止整库 `getAllPosts` 渲染。  
-6. **测试**：单元测试用 `tests/fixtures` 构造响应；e2e 用本地 Mock，**禁止**依赖真实账号或提交抓包中的 cookie。
+6. **测试**：单元测试用 `tests/fixtures` 构造响应；e2e 用本地 Mock，**禁止**依赖真实账号或提交抓包中的 cookie。  
+7. **作者常营销 / 常垃圾**：唯一来源是 `chrome.storage.local` 的 `xsl`（`ledger[userId].authorFlags`，次数在 `tags`，开关在 `settings`）。书签库读 `xsl.index`。不要再写一份 `bk_*` 或 Dexie 作者表。`setAuthorFlag` 不入静音/屏蔽队列。
 
 ## 改代码时的建议落点
 
@@ -88,6 +89,7 @@ x-toolkit/   # 仓库路径不变；包名 x-toolkit
 | 响应字段变化 | `api/parser.ts` + `tests/parser.test.ts` |
 | 同步策略 / 限流 | `background/sync-engine.ts`、`timeline-engine.ts`、`api/client.ts` |
 | 搜索语法 | `search/query-parser.ts` |
+| 作者常营销 / 常垃圾 | `strike/lib/author-flags.js`、`strike/lib/pure.js` 的 `setAuthorFlag`、书签 `AuthorMarks.tsx` |
 | 导出格式 | `export/*` |
 | UI 文案 | `ui/i18n.tsx` |
 | 权限 / 主机 | `public/manifest.json` |

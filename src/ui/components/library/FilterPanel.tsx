@@ -18,6 +18,8 @@ export interface LibraryFilterState {
   availability: 'all' | 'active' | 'tweet_deleted' | 'unbookmarked'
   /** '' | screen name | UNKNOWN_ACCOUNT */
   account: string
+  /** Library chip from the strike ledger. */
+  authorMark: '' | 'marketing' | 'spam' | 'any'
 }
 
 export const EMPTY_FILTER: LibraryFilterState = {
@@ -31,6 +33,7 @@ export const EMPTY_FILTER: LibraryFilterState = {
   authors: '',
   availability: 'all',
   account: '',
+  authorMark: '',
 }
 
 function toYmd(d: Date): string {
@@ -66,13 +69,14 @@ export function filterStateToSearch(f: LibraryFilterState): {
       status: f.availability,
       source: f.postType || 'all',
       accounts: f.account ? [f.account] : undefined,
+      authorMarks: f.authorMark ? [f.authorMark] : undefined,
     },
   }
 }
 
 export function filterChips(
   f: LibraryFilterState,
-  t: (k: 'account_filter' | 'account_unknown' | 'folder' | 'author' | 'lib_content_type' | 'lib_post_type' | 'lib_availability' | 'unfiled') => string,
+  t: (k: 'account_filter' | 'account_unknown' | 'folder' | 'author' | 'lib_content_type' | 'lib_post_type' | 'lib_availability' | 'unfiled' | 'lib_author_mark' | 'chip_marketing' | 'chip_spam' | 'lib_author_mark_any') => string,
 ): { id: string; label: string; clear: LibraryFilterState }[] {
   const chips: { id: string; label: string; clear: LibraryFilterState }[] = []
   if (f.account) {
@@ -87,6 +91,10 @@ export function filterChips(
   if (f.contentType) chips.push({ id: 'content', label: f.contentType, clear: { ...f, contentType: '' } })
   if (f.postType) chips.push({ id: 'postType', label: f.postType, clear: { ...f, postType: '' } })
   if (f.availability !== 'all') chips.push({ id: 'availability', label: f.availability, clear: { ...f, availability: 'all' } })
+  if (f.authorMark) {
+    const label = f.authorMark === 'marketing' ? t('chip_marketing') : f.authorMark === 'spam' ? t('chip_spam') : t('lib_author_mark_any')
+    chips.push({ id: 'authorMark', label: `${t('lib_author_mark')}: ${label}`, clear: { ...f, authorMark: '' } })
+  }
   return chips
 }
 
@@ -244,6 +252,18 @@ export function FilterPanel({
                   @{row.account} ({row.count})
                 </option>
               ))}
+            </select>
+          </label>
+          <label>
+            {t('lib_author_mark')}
+            <select
+              value={draft.authorMark}
+              onChange={(e) => set('authorMark', e.target.value as LibraryFilterState['authorMark'])}
+            >
+              <option value="">{t('all')}</option>
+              <option value="marketing">{t('chip_marketing')}</option>
+              <option value="spam">{t('chip_spam')}</option>
+              <option value="any">{t('lib_author_mark_any')}</option>
             </select>
           </label>
           <label>

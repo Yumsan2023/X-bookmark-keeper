@@ -2,6 +2,8 @@ import { useState } from 'react'
 import type { Post } from '@/shared/types'
 import { highlight } from '@/search/highlight'
 import { AccountBadges } from './AccountBadges'
+import { AuthorMarkButtons, AuthorMarkChips, type AuthorMarkLookup } from './AuthorMarks'
+import type { AuthorFlagName } from '../author-flags'
 import { useLang, useT } from '../i18n'
 import { fmtDate, fmtNum } from '../util'
 
@@ -22,9 +24,11 @@ interface Props {
   onNote: (post: Post) => void
   onDelete?: (post: Post) => void
   compact?: boolean
+  authorLookup?: AuthorMarkLookup | null
+  onAuthorFlag?: (post: Post, flag: AuthorFlagName, value: boolean) => void
 }
 
-export function PostCard({ post: p, terms, selected, onSelect, onTag, onNote, onDelete, compact }: Props) {
+export function PostCard({ post: p, terms, selected, onSelect, onTag, onNote, onDelete, compact, authorLookup, onAuthorFlag }: Props) {
   const t = useT()
   const lang = useLang()
   const [showThread, setShowThread] = useState(false)
@@ -42,6 +46,7 @@ export function PostCard({ post: p, terms, selected, onSelect, onTag, onNote, on
           {p.status === 'unbookmarked' && <span className="badge warn">{t('unbookmarked_badge')}</span>}
           {p.folder && <span className="badge">📁 {p.folder}</span>}
           <AccountBadges accounts={p.accounts} />
+          <AuthorMarkChips post={p} lookup={authorLookup} />
         </header>
         <p className="text"><Hl text={p.text} terms={terms} /></p>
         {p.quoted && (
@@ -87,6 +92,9 @@ export function PostCard({ post: p, terms, selected, onSelect, onTag, onNote, on
             {p.tags.map((tg) => <span key={tg} className="tag">#{tg}</span>)}
           </span>
           <span className="spacer" />
+          {onAuthorFlag && (
+            <AuthorMarkButtons post={p} lookup={authorLookup} onToggle={onAuthorFlag} />
+          )}
           <button className="link-btn" onClick={() => onTag(p)}>🏷 {t('tag')}</button>
           <button className="link-btn" onClick={() => onNote(p)}>📝 {t('edit_note')}</button>
           {onDelete && (

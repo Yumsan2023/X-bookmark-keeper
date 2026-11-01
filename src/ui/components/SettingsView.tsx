@@ -5,6 +5,7 @@ import { useT } from '../i18n'
 import type { Library } from '../hooks'
 import { useDialogs } from './Dialogs'
 import { saveBlob } from '../util'
+import { AuthorLinkSettings } from './AuthorLinkSettings'
 
 const COMMON_LLM_MODELS = ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1', 'o4-mini'] as const
 const LLM_MODEL_CUSTOM = '__custom__'
@@ -79,6 +80,8 @@ export function SettingsView({ settings, save, lib }: { settings: Settings; save
       </div>
       <label>{t('batch_size_export')}<input type="number" min={100} max={10000} step={100} value={s.exportBatchSize ?? 1000} onChange={(e) => up({ exportBatchSize: num(e.target.value, 1000) })} /></label>
       <p className="muted">{t('batch_size_export_hint')}</p>
+
+      <AuthorLinkSettings />
 
       <h3>{t('llm')}</h3>
       <p className="muted">{t('llm_hint')}</p>

@@ -285,6 +285,7 @@ function openSheet(shadow, build) {
 
 export function openPicker(shadow, model) {
   return openSheet(shadow, (sheet, finish) => {
+    let libraryFlagChecked = false;
     sheet.append(el("h2", { text: model.title }));
     if (model.subtitle) sheet.append(el("p", { text: model.subtitle }));
     if (model.note) sheet.append(el("p", { class: "safe", text: model.note }));
@@ -294,7 +295,7 @@ export function openPicker(shadow, model) {
         class: `tag${tag.on ? " on" : ""}`,
         type: "button",
         title: tag.title || "",
-        onClick: () => finish({ type: "toggle", tag: tag.name }),
+        onClick: () => finish({ type: "toggle", tag: tag.name, libraryFlag: libraryFlagChecked }),
       }, [tag.label, tag.count ? el("small", { text: String(tag.count) }) : null]));
     }
     sheet.append(tags);
@@ -333,6 +334,19 @@ export function openPicker(shadow, model) {
           }),
         ]),
       ]));
+    }
+    if (model.libraryFlagLabel) {
+      sheet.append(el("label", { class: "check" }, [
+        el("input", {
+          type: "checkbox",
+          checked: false,
+          onChange: (event) => {
+            libraryFlagChecked = !!event.target.checked;
+          },
+        }),
+        model.libraryFlagLabel,
+      ]));
+      if (model.libraryFlagHint) sheet.append(el("p", { class: "safe", text: model.libraryFlagHint }));
     }
     sheet.append(el("label", { class: "check" }, [
       el("input", {

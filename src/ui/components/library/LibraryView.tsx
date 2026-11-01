@@ -5,6 +5,8 @@ import type { Hit } from '@/search/engine'
 import { duplicateGroups, extraIds, groupByOriginal, type QuoteGroup } from '@/library/quote-groups'
 import type { MediaItem } from '@/shared/types'
 import { AccountBadges, dragBookmarkIds } from '../AccountBadges'
+import { AuthorMarkButtons, AuthorMarkChips } from '../AuthorMarks'
+import { commitAuthorFlags, type AuthorFlagName } from '../../author-flags'
 import { confirmUnbookmark } from '../../unbookmark'
 import {
   DEFAULT_LIBRARY_COLUMNS,
@@ -13,7 +15,7 @@ import {
   type Post,
   type Settings,
 } from '@/shared/types'
-import { bg, type Library } from '../../hooks'
+import { bg, useAuthorMarks, type Library } from '../../hooks'
 import { useLang, useT, type Key } from '../../i18n'
 import { fmtDate, fmtNum } from '../../util'
 import { useDialogs } from '../Dialogs'
@@ -128,7 +130,12 @@ export function LibraryView({
     return () => document.removeEventListener('mousedown', onDoc)
   }, [colsOpen])
 
-  const { filters, sortOldest } = useMemo(() => filterStateToSearch(filter), [filter])
+  const authorMarks = useAuthorMarks()
+  const { filters: panelFilters, sortOldest } = useMemo(() => filterStateToSearch(filter), [filter])
+  const filters = useMemo(
+    () => ({ ...panelFilters, authorMarkLookup: authorMarks.lookup }),
+    [panelFilters, authorMarks.lookup],
+  )
   const sort: SortKey = sortOldest ? 'created_asc' : 'saved_desc'
 
   useEffect(() => {
@@ -171,6 +178,13 @@ export function LibraryView({
   const flash = (m: string) => {
     setInfo(m)
     setTimeout(() => setInfo(''), 6000)
+  }
+
+  const onAuthorFlag = async (posts: Post[], flag: AuthorFlagName, value: boolean) => {
+    const result = await commitAuthorFlags(posts, flag, value)
+    const parts = [t('author_flag_done', { n: result.ok })]
+    if (result.failed) parts.push(t('author_flag_fail', { n: result.failed }))
+    flash(parts.join(' · '))
   }
 
   const toggleCol = (id: LibraryColumnId) => {
@@ -335,6 +349,18 @@ export function LibraryView({
             >
               🗑 {t('delete_bookmark')}
             </button>
+            <button type="button" onClick={() => void onAuthorFlag([...selectedCache.values()], 'marketing', true)}>
+              {t('mark_marketing')}
+            </button>
+            <button type="button" onClick={() => void onAuthorFlag([...selectedCache.values()], 'marketing', false)}>
+              {t('unmark_marketing')}
+            </button>
+            <button type="button" onClick={() => void onAuthorFlag([...selectedCache.values()], 'spam', true)}>
+              {t('mark_spam')}
+            </button>
+            <button type="button" onClick={() => void onAuthorFlag([...selectedCache.values()], 'spam', false)}>
+              {t('unmark_spam')}
+            </button>
             <button type="button" onClick={() => setSelected(new Set())}>
               {t('clear_selection')}
             </button>
@@ -422,7 +448,10 @@ export function LibraryView({
                     {media.type !== 'photo' && <span className="play">▶</span>}
                     {fromQuote && <span className="media-gallery-q">↪</span>}
                   </a>
-                  <div className="media-gallery-meta muted">@{post.screen_name}</div>
+                  <div className="media-gallery-meta muted">
+                    @{post.screen_name} <AuthorMarkChips post={post} lookup={authorMarks.lookup} />
+                    <AuthorMarkButtons post={post} lookup={authorMarks.lookup} onToggle={(item, flag, value) => void onAuthorFlag([item], flag, value)} />
+                  </div>
                 </div>
               )
             })}
@@ -520,6 +549,7 @@ export function LibraryView({
                           <span className="muted">@{p.screen_name}</span>
                           <span className="lib-acct-badges">
                             <AccountBadges accounts={p.accounts} />
+                            <AuthorMarkChips post={p} lookup={authorMarks.lookup} />
                           </span>
                         </div>
                       </td>
@@ -558,6 +588,7 @@ export function LibraryView({
                     {show('replies') && <td className="num">{fmtNum(p.metrics.replies)}</td>}
                     {show('created_at') && <td className="lib-date">{fmtDate(p.created_at, lang)}</td>}
                     <td className="lib-actions">
+                      <AuthorMarkButtons post={p} lookup={authorMarks.lookup} onToggle={(post, flag, value) => void onAuthorFlag([post], flag, value)} />
                       <button
                         type="button"
                         className="lib-row-action danger"
@@ -592,6 +623,8 @@ export function LibraryView({
                           @{p.screen_name} {p.text?.slice(0, 180)}
                         </a>
                         <AccountBadges accounts={p.accounts} />
+                        <AuthorMarkChips post={p} lookup={authorMarks.lookup} />
+                        <AuthorMarkButtons post={p} lookup={authorMarks.lookup} onToggle={(post, flag, value) => void onAuthorFlag([post], flag, value)} />
                       </td>
                     </tr>
                   )
@@ -644,6 +677,7 @@ export function LibraryView({
                           <div key={p.tweet_id} className="lib-child-row">
                             <label>
                               <input type="checkbox" checked={selected.has(p.tweet_id)} onChange={(e) => toggleRow(p.tweet_id, e.target.checked)} /> @{p.screen_name}{' '}
+                              <AuthorMarkChips post={p} lookup={authorMarks.lookup} />{' '}
                               {p.text?.slice(0, 120)}
                             </label>
                           </div>

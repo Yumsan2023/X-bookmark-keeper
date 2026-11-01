@@ -6,7 +6,8 @@ import { NO_FOLDER } from '@/search/query-parser'
 import type { Filters, SortKey } from '@/search/engine'
 import type { Hit } from '@/search/engine'
 import type { Post, Settings } from '@/shared/types'
-import { bg, type Library } from '../hooks'
+import { commitAuthorFlags, type AuthorFlagName } from '../author-flags'
+import { bg, useAuthorMarks, type Library } from '../hooks'
 import { useT, type Key } from '../i18n'
 import { downloadMedia, exportPosts, exportPostsBatched, openPrint, type ExportKind } from '../util'
 import { AiDialog } from './AiDialog'
@@ -65,6 +66,7 @@ export function SearchView({ lib, settings, compact, preset }: { lib: Library; s
   useEffect(() => setPage(0), [debounced, authors, since, until, folder, has, tag, status, source, sort])
   useEffect(() => setBatchSize(settings.exportBatchSize || 1000), [settings.exportBatchSize])
 
+  const authorMarks = useAuthorMarks()
   const filters: Filters = useMemo(
     () => ({
       authors: authors.split(/[\s,，]+/).filter(Boolean),
@@ -75,8 +77,9 @@ export function SearchView({ lib, settings, compact, preset }: { lib: Library; s
       tags: tag ? [tag] : undefined,
       status,
       source,
+      authorMarkLookup: authorMarks.lookup,
     }),
-    [authors, since, until, folder, has, tag, status, source],
+    [authors, since, until, folder, has, tag, status, source, authorMarks.lookup],
   )
 
   useEffect(() => {
@@ -113,6 +116,12 @@ export function SearchView({ lib, settings, compact, preset }: { lib: Library; s
   const flash = (m: string) => {
     setInfo(m)
     setTimeout(() => setInfo(''), 5000)
+  }
+  const onAuthorFlag = async (posts: Post[], flag: AuthorFlagName, value: boolean) => {
+    const result = await commitAuthorFlags(posts, flag, value)
+    const parts = [t('author_flag_done', { n: result.ok })]
+    if (result.failed) parts.push(t('author_flag_fail', { n: result.failed }))
+    flash(parts.join(' · '))
   }
   const afterChange = async () => {
     await lib.reload()
@@ -315,6 +324,10 @@ export function SearchView({ lib, settings, compact, preset }: { lib: Library; s
             {lib.folders.map((f) => <option key={f.name} value={f.name}>{f.name}</option>)}
             <option value="__new__">＋ {t('create_folder')}…</option>
           </select>
+          <button onClick={() => void onAuthorFlag(selectedPosts(), 'marketing', true)}>{t('mark_marketing')}</button>
+          <button onClick={() => void onAuthorFlag(selectedPosts(), 'marketing', false)}>{t('unmark_marketing')}</button>
+          <button onClick={() => void onAuthorFlag(selectedPosts(), 'spam', true)}>{t('mark_spam')}</button>
+          <button onClick={() => void onAuthorFlag(selectedPosts(), 'spam', false)}>{t('unmark_spam')}</button>
           <button onClick={onAddTag}>🏷 {t('add_tag')}</button>
           <button onClick={onRemoveTag}>{t('remove_tag')}</button>
           <button onClick={() => bg({ type: 'threads/fetch', tweetIds: [...selected] }).then(() => flash(t('task')))}>{t('fetch_threads')}</button>
@@ -345,6 +358,8 @@ export function SearchView({ lib, settings, compact, preset }: { lib: Library; s
               onNote={setNoteEdit}
               onDelete={(post) => void onUnbookmark([post.tweet_id])}
               compact={compact}
+              authorLookup={authorMarks.lookup}
+              onAuthorFlag={(post, flag, value) => void onAuthorFlag([post], flag, value)}
             />
           ))
         )}

@@ -2,7 +2,8 @@ import MiniSearch from 'minisearch'
 import { matchesAccountFilter } from '@/shared/accounts'
 import type { Post, PostSource } from '@/shared/types'
 import { postSource } from '@/shared/types'
-import { NO_FOLDER, parseQuery, type HasKind, type ParsedQuery, type SourceFilter, type StatusFilter } from './query-parser'
+import { postExcludedByAuthorMarks, postMatchesAuthorMarks } from '@/strike/lib/author-flags.js'
+import { NO_FOLDER, parseQuery, type AuthorMarkKind, type HasKind, type ParsedQuery, type SourceFilter, type StatusFilter } from './query-parser'
 import { tokenize } from './tokenizer'
 
 export type SortKey = 'relevance' | 'saved_desc' | 'saved_asc' | 'created_desc' | 'created_asc' | 'likes_desc' | 'views_desc'
@@ -20,6 +21,13 @@ export interface Filters {
   source?: SourceFilter | 'all'
   /** Owning bookmark accounts. `__unknown__` = bookmarks with no account stamp. */
   accounts?: string[]
+  /** Panel filter: author:marketing / strike:spam chips. AND with the query. */
+  authorMarks?: AuthorMarkKind[]
+  /** Built from xsl.index. Required for author:/strike: to match anything. */
+  authorMarkLookup?: {
+    byUserId: { get(id: string): unknown }
+    byHandle: { get(handle: string): unknown }
+  } | null
 }
 
 export interface SearchInput {
@@ -100,6 +108,9 @@ export function matchesFilters(p: Post, q: ParsedQuery, f: Filters = {}): boolea
   const src = q.source ?? (f.source && f.source !== 'all' ? f.source : undefined)
   if (src && postSource(p) !== src) return false
   if (!matchesAccountFilter(p, f.accounts)) return false
+  const kinds = [...(q.authorMarks ?? []), ...(f.authorMarks ?? [])]
+  if (!postMatchesAuthorMarks(p, f.authorMarkLookup, kinds)) return false
+  if (postExcludedByAuthorMarks(p, f.authorMarkLookup, q.excludeAuthorMarks ?? [])) return false
   return true
 }
 
