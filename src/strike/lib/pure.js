@@ -16,6 +16,10 @@
  * add a strike, enqueue mute or block, or call X. A failed URL refresh keeps
  * the previous local copy. Whitelist still blocks folding. Following still
  * blocks folding. False-positive vetoes still suppress a hit.
+ * A keyword pattern with `enqueue: false` still matches (yellow chip and fold).
+ * ruleEnqueueGate then keeps that hit from queueing mute or block. Another
+ * pattern that still allows enqueue can queue once the tag threshold is met.
+ * Missing `enqueue` means allowed, which is the previous behavior.
  */
 
 import {
@@ -232,6 +236,35 @@ export function commentStrikePlatform(threshold, surface, source) {
     commentSignal: true,
     blockedQueue,
   };
+}
+
+/**
+ * Mute/block suggestion after a strike confirmed from a keyword rule.
+ * Yellow chips and folding do not go through here. Manual, shortcut, and AI
+ * marks do not go through here. Community hits never confirm a rule strike.
+ *
+ * `queueEligible === false` means every firm hit on that card came from a
+ * pattern with enqueue turned off. Mute and block are cleared. Whether the
+ * threshold dialog opens still comes from applyMark: strikes that cannot
+ * queue do not count toward the mute/block threshold, and a later strike that
+ * can queue opens it once that count is met. This helper does not reopen it.
+ *
+ * @param {{ suggest?: { hide?: boolean, mute?: boolean, block?: boolean }, blockedByRule?: boolean } | null | undefined} threshold
+ * @param {string} [source]
+ * @param {boolean | undefined} queueEligible
+ */
+export function ruleEnqueueGate(threshold, source, queueEligible) {
+  if (!threshold || source !== "rule") {
+    return { threshold: threshold || null, blockedByRule: !!threshold?.blockedByRule };
+  }
+  if (queueEligible === false) {
+    const suggest = { ...(threshold.suggest || {}) };
+    const blockedByRule = !!(suggest.mute || suggest.block) || !!threshold.blockedByRule;
+    suggest.mute = false;
+    suggest.block = false;
+    return { threshold: { ...threshold, suggest, blockedByRule }, blockedByRule };
+  }
+  return { threshold, blockedByRule: !!threshold.blockedByRule };
 }
 
 /** How many tag chips to paint before a “+N” overflow chip. */
@@ -677,6 +710,7 @@ function collectRuleHits(packs, ctx) {
         pattern: value,
         patternType,
         target,
+        enqueue: pattern.enqueue !== false,
       });
     }
   }
@@ -760,8 +794,17 @@ export function matchRules(packs, ctx) {
   for (const row of tagged) {
     if (row.mode === "hard") continue;
     if (row.mode === "soft" && !anyFirm) continue;
+    const firmEnqueue = row.mode === "" && row.hit.enqueue !== false;
     const prev = byPack.get(row.hit.packId);
-    if (!prev || (prev.mode === "soft" && row.mode === "")) byPack.set(row.hit.packId, row);
+    if (!prev) {
+      byPack.set(row.hit.packId, { hit: row.hit, mode: row.mode, enqueue: firmEnqueue });
+      continue;
+    }
+    if (firmEnqueue) prev.enqueue = true;
+    if (prev.mode === "soft" && row.mode === "") {
+      prev.hit = row.hit;
+      prev.mode = "";
+    }
   }
   const reasons = [];
   const tags = [];
@@ -773,12 +816,18 @@ export function matchRules(packs, ctx) {
       pattern: String(row.hit.pattern).slice(0, 80),
       patternType: row.hit.patternType === "regex" ? "regex" : "keyword",
       target: row.hit.target,
+      enqueue: row.enqueue === true,
     };
     if (row.mode === "soft") reason.cooled = true;
     reasons.push(reason);
     if (row.hit.suggestTag && !tags.includes(row.hit.suggestTag)) tags.push(row.hit.suggestTag);
   }
-  return { suspect: reasons.length > 0, tags, reasons };
+  return {
+    suspect: reasons.length > 0,
+    tags,
+    reasons,
+    queueEligible: reasons.some((reason) => reason.enqueue === true && !reason.cooled),
+  };
 }
 
 /** How many community lists, and how many handles or words each list keeps. */
@@ -1406,12 +1455,20 @@ function patternToLine(pattern) {
 const PACK_TEXT_HEADER = [
   "# X Toolkit keyword packs",
   "# [Pack name] starts a pack. The next lines may be id:, enabled: true|false, suggest: Spam|Marketing|none.",
+  "# enqueue: false on the pack means those rules still match, but do not queue mute/block by themselves.",
+  "# A single rule can override with a suffix: word {enqueue:false} or word {enqueue:true}.",
+  "# Turning enqueue off does not turn matching off. The yellow chip and folding stay.",
   "# A bare line is a keyword for any field. text: / handle: / bio: limit the field.",
   "# /pattern/i is a regex (optional i flag). Field form: text:/pattern/i",
   "# A file with no [pack] header becomes one pack named Imported.",
   "# Apply replaces the packs in the form. Save to keep them.",
   "# A match only paints the Suspect chip. It never adds a strike.",
 ].join("\n");
+
+function enqueueSuffix(line, pattern) {
+  if (!line || pattern?.enqueue !== false) return line;
+  return `${line} {enqueue:false}`;
+}
 
 export function packsToText(packs) {
   const blocks = [];
@@ -1422,13 +1479,23 @@ export function packsToText(packs) {
     lines.push(`enabled: ${pack?.enabled === false ? "false" : "true"}`);
     const suggest = pack?.suggestTag === "Marketing" || pack?.suggestTag === "Spam" ? pack.suggestTag : "none";
     lines.push(`suggest: ${suggest}`);
-    for (const pattern of pack?.patterns || []) {
+    const patterns = pack?.patterns || [];
+    const allOff = patterns.length > 0 && patterns.every((pattern) => pattern?.enqueue === false);
+    if (allOff) lines.push("enqueue: false");
+    for (const pattern of patterns) {
       const line = patternToLine(pattern);
-      if (line) lines.push(line);
+      if (!line) continue;
+      lines.push(allOff ? line : enqueueSuffix(line, pattern));
     }
     blocks.push(lines.join("\n"));
   }
   return `${PACK_TEXT_HEADER}\n\n${blocks.join("\n\n")}\n`;
+}
+
+function splitEnqueueSuffix(line) {
+  const match = String(line || "").match(/^(.*?)(?:\s+\{enqueue:(true|false)\})\s*$/i);
+  if (!match) return { line: String(line || ""), enqueue: null };
+  return { line: match[1], enqueue: match[2].toLowerCase() === "true" };
 }
 
 function parsePatternLine(line) {
@@ -1469,6 +1536,7 @@ export function parseKeywordPackText(text) {
     let id = meta?.id || "";
     let enabled = meta ? meta.enabled : true;
     let suggestTag = meta ? meta.suggestTag : "Spam";
+    let enqueue = true;
     for (const line of sourceLines) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith("#")) continue;
@@ -1476,6 +1544,7 @@ export function parseKeywordPackText(text) {
         const idMatch = trimmed.match(/^id:\s*([A-Za-z0-9_-]{1,40})$/);
         const enabledMatch = trimmed.match(/^enabled:\s*(true|false)$/);
         const suggestMatch = trimmed.match(/^suggest:\s*(Spam|Marketing|none)$/);
+        const enqueueMatch = trimmed.match(/^enqueue:\s*(true|false)$/i);
         if (idMatch) {
           id = idMatch[1];
           continue;
@@ -1488,14 +1557,21 @@ export function parseKeywordPackText(text) {
           suggestTag = suggestMatch[1] === "none" ? "" : suggestMatch[1];
           continue;
         }
+        if (enqueueMatch) {
+          enqueue = enqueueMatch[1].toLowerCase() === "true";
+          continue;
+        }
         directives = false;
       }
-      const pattern = parsePatternLine(trimmed);
+      const split = splitEnqueueSuffix(trimmed);
+      const pattern = parsePatternLine(split.line);
       if (!pattern) continue;
       if (pattern.error) {
         warnings.push(`已忽略空正则（${packName}）`);
         continue;
       }
+      const allow = split.enqueue == null ? enqueue : split.enqueue;
+      if (!allow) pattern.enqueue = false;
       patterns.push(pattern);
     }
     return { id, enabled, suggestTag, patterns };
@@ -2342,7 +2418,12 @@ function sanitizePattern(raw, warnings, packName) {
       return null;
     }
   }
-  return { type, target, value };
+  return {
+    type,
+    target,
+    value,
+    ...(raw?.enqueue === false ? { enqueue: false } : {}),
+  };
 }
 
 function sanitizePacks(raw, warnings) {
@@ -2479,8 +2560,24 @@ function upsertEvidence(account, name, evidence) {
     account.tags.push(tag);
   }
   tag.count += 1;
-  tag.evidence = [evidence, ...tag.evidence.filter((item) => item.tweetId !== evidence.tweetId)].slice(0, EVIDENCE_CAP);
+  if (evidence.queueEligible === false) tag.queueSkipped = (tag.queueSkipped || 0) + 1;
+  const stored = evidence.queueEligible === false ? evidence : { ...evidence };
+  if (stored.queueEligible !== false) delete stored.queueEligible;
+  tag.evidence = [stored, ...tag.evidence.filter((item) => item.tweetId !== evidence.tweetId)].slice(0, EVIDENCE_CAP);
   return tag;
+}
+
+function releaseStrike(account, tagName, tweetId) {
+  if (!account) return;
+  const row = account.tags.find((item) => item.name === tagName);
+  if (!row) return;
+  const removed = (row.evidence || []).find((item) => item.tweetId === tweetId);
+  if (removed?.queueEligible === false) row.queueSkipped = Math.max(0, (row.queueSkipped || 0) - 1);
+  row.evidence = (row.evidence || []).filter((item) => item.tweetId !== tweetId);
+  row.count = Math.max(0, row.count - 1);
+  if ((row.queueSkipped || 0) > row.count) row.queueSkipped = row.count;
+  if (!row.queueSkipped) delete row.queueSkipped;
+  if (row.count === 0) account.tags = account.tags.filter((item) => item !== row);
 }
 
 export function statusUrl(handle, tweetId, given) {
@@ -2577,14 +2674,28 @@ export function toPublicSettings(settings) {
   return copy;
 }
 
-function thresholdPayload(state, account, tag, prevCount) {
+function eligibleCount(account, tag) {
+  return Math.max(0, countTag(account, tag) - (account.tags.find((item) => item.name === tag)?.queueSkipped || 0));
+}
+
+function thresholdPayload(state, account, tag, prevCount, prevEligible, markedIneligible) {
   const count = countTag(account, tag);
+  const eligible = eligibleCount(account, tag);
+  const beforeEligible = Number.isFinite(prevEligible) ? prevEligible : prevCount;
   const n = thresholdFor(state.settings, tag);
   let skipped = null;
   if (account.whitelist) skipped = "whitelist";
+  const countCrossed = prevCount < n && count >= n;
+  const queueCrossed = beforeEligible < n && eligible >= n;
+  const muteAllowed = autoPlatformAllowed(state.settings, account, "mute");
+  const blockAllowed = autoPlatformAllowed(state.settings, account, "block");
+  const reopenQueue = queueCrossed && !account.whitelist && state.settings.actionMode !== "prompt-only";
   return {
     reached: count >= n,
-    crossed: prevCount < n && count >= n,
+    crossed: countCrossed || reopenQueue,
+    queueReached: eligible >= n,
+    queueCrossed,
+    blockedByRule: !!markedIneligible && countCrossed && !queueCrossed && (muteAllowed || blockAllowed),
     tag,
     count,
     n,
@@ -2593,8 +2704,8 @@ function thresholdPayload(state, account, tag, prevCount) {
     mode: state.settings.actionMode,
     suggest: {
       hide: !!state.settings.hideOnThreshold && !account.whitelist && account.followed !== true,
-      mute: autoPlatformAllowed(state.settings, account, "mute"),
-      block: autoPlatformAllowed(state.settings, account, "block"),
+      mute: eligible >= n && muteAllowed,
+      block: eligible >= n && blockAllowed,
     },
   };
 }
@@ -2610,6 +2721,8 @@ export function applyMark(state, input, now) {
   const account = ensureAccount(state, { ...input, userId, handle }, now);
   if (input.followed === true || input.followed === false) account.followed = input.followed;
   const prevCount = countTag(account, tag);
+  const prevEligible = eligibleCount(account, tag);
+  const markedIneligible = input.queueEligible === false;
   const existing = state.tweets[tweetId];
   if (existing && existing.userId !== userId) return { ok: false, error: "tweet-owner" };
   const tweet = existing || {
@@ -2644,6 +2757,7 @@ export function applyMark(state, input, now) {
     url: tweet.url,
     textSnippet: tweet.textSnippet,
     markedAt: now,
+    ...(markedIneligible ? { queueEligible: false } : {}),
   });
   account.updatedAt = now;
   pushUndo(state, { id: uid("undo"), kind: "mark", tweetId, userId, handle, tag, at: now });
@@ -2653,7 +2767,7 @@ export function applyMark(state, input, now) {
     already: false,
     userId,
     account: publicAccount(account),
-    threshold: thresholdPayload(state, account, tag, prevCount),
+    threshold: thresholdPayload(state, account, tag, prevCount, prevEligible, markedIneligible),
   };
 }
 
@@ -2663,18 +2777,24 @@ export function applyUnmark(state, input, now) {
   if (!tag || !tweet || !tweet.tags.includes(tag)) return { ok: false, error: "missing" };
   tweet.tags = tweet.tags.filter((item) => item !== tag);
   const account = state.ledger[tweet.userId];
+  const removed = account?.tags?.find((item) => item.name === tag)?.evidence?.find((item) => item.tweetId === tweet.tweetId);
   if (account) {
-    const row = account.tags.find((item) => item.name === tag);
-    if (row) {
-      row.evidence = row.evidence.filter((item) => item.tweetId !== tweet.tweetId);
-      row.count = Math.max(0, row.count - 1);
-      if (row.count === 0) account.tags = account.tags.filter((item) => item !== row);
-    }
+    releaseStrike(account, tag, tweet.tweetId);
     account.updatedAt = now;
   }
   if (!tweet.tags.length) delete state.tweets[tweet.tweetId];
   else state.tweets[tweet.tweetId] = tweet;
-  pushUndo(state, { id: uid("undo"), kind: "unmark", tweetId: tweet.tweetId, userId: tweet.userId, handle: tweet.handle, tag, at: now, snapshot: null });
+  pushUndo(state, {
+    id: uid("undo"),
+    kind: "unmark",
+    tweetId: tweet.tweetId,
+    userId: tweet.userId,
+    handle: tweet.handle,
+    tag,
+    at: now,
+    snapshot: null,
+    ...(removed?.queueEligible === false ? { queueEligible: false } : {}),
+  });
   rebuildIndex(state);
   return { ok: true, userId: tweet.userId, account: account ? publicAccount(account) : null };
 }
@@ -3091,12 +3211,7 @@ export function applyUndo(state, now) {
     }
     const account = state.ledger[entry.userId];
     if (account) {
-      const row = account.tags.find((tag) => tag.name === entry.tag);
-      if (row) {
-        row.evidence = row.evidence.filter((item) => item.tweetId !== entry.tweetId);
-        row.count = Math.max(0, row.count - 1);
-        if (row.count === 0) account.tags = account.tags.filter((tag) => tag !== row);
-      }
+      releaseStrike(account, entry.tag, entry.tweetId);
       account.updatedAt = now;
     }
   } else if (entry.kind === "unmark") {
@@ -3107,6 +3222,7 @@ export function applyUndo(state, now) {
       tag: entry.tag,
       textSnippet: "",
       source: "undo",
+      ...(entry.queueEligible === false ? { queueEligible: false } : {}),
     }, now);
     state.undo.shift();
   } else if (entry.kind === "hidden") {
@@ -3306,12 +3422,14 @@ export function statsOf(state, now = Date.now()) {
 function normalizeEvidence(raw, fallbackTime) {
   const tweetId = String(raw?.tweetId || "").trim().slice(0, 40);
   if (!/^[A-Za-z0-9_-]{2,40}$/.test(tweetId)) return null;
-  return {
+  const clean = {
     tweetId,
     url: statusUrl("", tweetId, raw.url),
     textSnippet: snippet(raw.textSnippet),
     markedAt: timeOf(raw.markedAt, fallbackTime),
   };
+  if (raw?.queueEligible === false) clean.queueEligible = false;
+  return clean;
 }
 
 function normalizeAccount(raw, now) {
@@ -3332,7 +3450,11 @@ function normalizeAccount(raw, now) {
     }
     const count = Math.max(clampInt(tag.count, 0, 100000, 0), evidence.length);
     if (!count) continue;
-    tags.push({ name, count, evidence });
+    const fromEvidence = evidence.filter((item) => item.queueEligible === false).length;
+    const skipped = Math.min(count, Math.max(clampInt(tag.queueSkipped, 0, count, 0), fromEvidence));
+    const row = { name, count, evidence };
+    if (skipped) row.queueSkipped = skipped;
+    tags.push(row);
   }
   return {
     userId,

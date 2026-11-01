@@ -168,6 +168,21 @@ export async function mountStrikeOptions(root) {
       checkbox.checked = pack.enabled !== false;
       checkbox.addEventListener("change", () => { pack.enabled = checkbox.checked; });
       enabled.append(checkbox, document.createTextNode(t("packEnabled")));
+      const packEnqueue = document.createElement("label");
+      packEnqueue.className = "inline";
+      packEnqueue.title = t("ruleEnqueueHelp");
+      const enqueueAll = document.createElement("input");
+      enqueueAll.type = "checkbox";
+      enqueueAll.dataset.packEnqueue = "1";
+      syncPackEnqueue(enqueueAll, pack);
+      enqueueAll.addEventListener("change", () => {
+        for (const pattern of pack.patterns) {
+          if (enqueueAll.checked) delete pattern.enqueue;
+          else pattern.enqueue = false;
+        }
+        renderPacks();
+      });
+      packEnqueue.append(enqueueAll, document.createTextNode(t("packEnqueue")));
       const suggest = document.createElement("select");
       suggest.setAttribute("aria-label", t("suggestTag"));
       for (const [value, label] of [["Spam", t("spam")], ["Marketing", t("marketing")], ["", t("noneTag")]]) {
@@ -178,7 +193,7 @@ export async function mountStrikeOptions(root) {
       }
       suggest.value = pack.suggestTag === "Marketing" ? "Marketing" : pack.suggestTag === "Spam" ? "Spam" : "";
       suggest.addEventListener("change", () => { pack.suggestTag = suggest.value; });
-      card.append(title, enabled, suggest);
+      card.append(title, enabled, packEnqueue, suggest);
       for (const pattern of pack.patterns) {
         card.append(patternRow(pack, pattern));
       }
@@ -186,7 +201,10 @@ export async function mountStrikeOptions(root) {
       controls.className = "row";
       controls.append(
         button(t("addPattern"), () => {
-          pack.patterns.push({ type: "keyword", target: "any", value: "" });
+          const enqueueOff = pack.patterns.length > 0 && pack.patterns.every((pattern) => pattern.enqueue === false);
+          pack.patterns.push(enqueueOff
+            ? { type: "keyword", target: "any", value: "", enqueue: false }
+            : { type: "keyword", target: "any", value: "" });
           renderPacks();
         }),
         button(t("remove"), () => {
@@ -225,11 +243,33 @@ export async function mountStrikeOptions(root) {
     value.value = pattern.value;
     value.placeholder = pattern.type === "regex" ? "(?i)t\\.me/" : t("pattern");
     value.addEventListener("input", () => { pattern.value = value.value; });
-    row.append(type, target, value, button(t("remove"), () => {
+    const enqueue = document.createElement("label");
+    enqueue.className = "inline enqueue";
+    enqueue.title = t("ruleEnqueueHelp");
+    const enqueueBox = document.createElement("input");
+    enqueueBox.type = "checkbox";
+    enqueueBox.checked = pattern.enqueue !== false;
+    enqueueBox.addEventListener("change", () => {
+      if (enqueueBox.checked) delete pattern.enqueue;
+      else pattern.enqueue = false;
+      const card = row.closest(".pack");
+      const packBox = card?.querySelector("[data-pack-enqueue]");
+      if (packBox) syncPackEnqueue(packBox, pack);
+    });
+    enqueue.append(enqueueBox, document.createTextNode(t("ruleEnqueue")));
+    row.append(type, target, value, enqueue, button(t("remove"), () => {
       pack.patterns = pack.patterns.filter((item) => item !== pattern);
       renderPacks();
     }));
     return row;
+  }
+
+  function syncPackEnqueue(box, pack) {
+    const flags = (pack.patterns || []).map((pattern) => pattern.enqueue !== false);
+    const allOn = flags.every(Boolean);
+    const allOff = flags.length > 0 && flags.every((on) => !on);
+    box.checked = allOn;
+    box.indeterminate = !allOn && !allOff;
   }
 
   function renderLedger() {

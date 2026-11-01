@@ -16,6 +16,7 @@ import {
   matchCommunityLists,
   matchRules,
   resolveLang,
+  ruleEnqueueGate,
   strikeReasonFromMatch,
   suggestPackId,
   tagLabel,
@@ -490,9 +491,10 @@ async function withOverlay(task) {
   }
 }
 
-async function afterThreshold(result, meta, source) {
+async function afterThreshold(result, meta, source, match) {
   const gated = commentStrikePlatform(result.threshold, meta?.surface, source);
-  const threshold = gated.threshold;
+  const ruled = ruleEnqueueGate(gated.threshold, source, match?.queueEligible);
+  const threshold = ruled.threshold;
   if (!threshold?.crossed) return;
   const tag = tagLabel(threshold.tag, lang);
   if (threshold.skipped === "whitelist") {
@@ -501,6 +503,7 @@ async function afterThreshold(result, meta, source) {
   }
   if (threshold.mode === "prompt-only") {
     toast(overlay, t("promptOnly", { handle: meta.handle, tag, count: threshold.count, n: threshold.n }));
+    if (ruled.blockedByRule) toast(overlay, t("ruleNoQueue"));
     if (gated.commentSignal) toast(overlay, t("commentNoQueue"));
     return;
   }
@@ -529,6 +532,7 @@ async function afterThreshold(result, meta, source) {
     } else {
       toast(overlay, t("autoDone", { handle: meta.handle, actions: t("justRecord") }));
     }
+    if (ruled.blockedByRule) toast(overlay, t("ruleNoQueue"));
     if (gated.commentSignal) toast(overlay, t("commentNoQueue"));
     return;
   }
@@ -536,7 +540,10 @@ async function afterThreshold(result, meta, source) {
   const warnings = [];
   if (threshold.followed === true) warnings.push(t("thresholdWarnFollow"));
   else if (threshold.followed == null) warnings.push(t("thresholdWarnUnknown"));
+  if (ruled.blockedByRule) warnings.push(t("ruleNoQueue"));
   if (gated.commentSignal) warnings.push(t("commentNoQueue"));
+  const queueBlocked = gated.commentSignal || ruled.blockedByRule;
+  const queueHint = ruled.blockedByRule ? t("ruleNoQueue") : gated.commentSignal ? t("commentNoQueue") : "";
   const choice = await withOverlay(() => openChoice(overlay, {
     title: t("thresholdTitle", { tag }),
     body: t("thresholdBody", { handle: meta.handle, tag, count: threshold.count, n: threshold.n }),
@@ -547,15 +554,15 @@ async function afterThreshold(result, meta, source) {
         id: "mute",
         label: t("mute"),
         checked: !!threshold.suggest.mute,
-        disabled: !settings.enablePlatformActions || gated.commentSignal,
-        hint: gated.commentSignal ? t("commentNoQueue") : t("muteHint"),
+        disabled: !settings.enablePlatformActions || queueBlocked,
+        hint: queueHint || t("muteHint"),
       },
       {
         id: "block",
         label: t("block"),
         checked: !!threshold.suggest.block,
-        disabled: !settings.enablePlatformActions || gated.commentSignal,
-        hint: gated.commentSignal ? t("commentNoQueue") : t("blockHint"),
+        disabled: !settings.enablePlatformActions || queueBlocked,
+        hint: queueHint || t("blockHint"),
       },
     ],
     confirm: t("actConfirm"),
@@ -578,7 +585,7 @@ async function afterThreshold(result, meta, source) {
   if (choice.checks.mute || choice.checks.block) pump();
 }
 
-async function markTag(meta, tag, source) {
+async function markTag(meta, tag, source, match) {
   const clean = canonicalTag(tag);
   if (!clean) {
     toast(overlay, t("bad-tag"));
@@ -595,6 +602,7 @@ async function markTag(meta, tag, source) {
     tag: clean,
     followed: meta.followed,
     source,
+    ...(source === "rule" ? { queueEligible: match?.queueEligible === true } : {}),
   });
   if (!result?.ok) {
     toast(overlay, t(result?.error || "error"));
@@ -606,7 +614,7 @@ async function markTag(meta, tag, source) {
   }
   const count = result.account?.tags?.find((row) => row.name === clean)?.count || result.threshold?.count || 1;
   toast(overlay, t("marked", { handle: meta.handle, tag: tagLabel(clean, lang), count }));
-  await afterThreshold(result, meta, source);
+  await afterThreshold(result, meta, source, match);
 }
 
 async function toggleTag(meta, tag) {
@@ -785,7 +793,7 @@ async function confirmRule(article) {
     await offerFalsePositive(meta, "suspect");
     return;
   }
-  if (choice?.confirm) await markTag(meta, tag, "rule");
+  if (choice?.confirm) await markTag(meta, tag, "rule", matched);
 }
 
 async function offerFalsePositive(meta, source, extra = {}) {
