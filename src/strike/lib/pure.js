@@ -2,7 +2,7 @@
  * Pure ledger, rule, and shortcut logic.
  * No chrome.* and no DOM so Node tests and the service worker share one implementation.
  * Strike counts change only through applyMark / import / undo — never through
- * matchRules, addKeywordToPack, or recordRuleHits.
+ * matchRules, addKeywordToPack, addDistilledRules, or recordRuleHits.
  */
 
 export const SCHEMA = 1;
@@ -745,8 +745,295 @@ export function keywordMenuPlan(packs, lang) {
   };
 }
 
+export const DISTILL_CAP = 6;
+
+const DISTILL_STOP = new Set([
+  "a", "an", "the", "and", "or", "to", "of", "for", "in", "on", "at", "is", "are", "was", "were", "be", "been", "am",
+  "this", "that", "with", "you", "your", "me", "my", "we", "our", "from", "by", "it", "its", "as", "if", "not", "just",
+  "now", "new", "get", "all", "out", "up", "so", "do", "can", "will", "have", "has", "but", "about", "into", "than",
+  "then", "they", "them", "their", "his", "her", "she", "he", "i", "im", "rt", "http", "https", "www", "com", "co",
+  "的", "了", "是", "在", "我", "你", "他", "她", "它", "我们", "你们", "他们", "和", "与", "或", "就", "也", "都", "很",
+  "这", "那", "一个", "没有", "不是", "什么", "怎么", "可以", "因为", "所以", "如果", "但是", "还是", "以及",
+  "吧", "吗", "呢", "啊", "哦", "嗯", "请", "把", "被", "给", "让", "又", "再", "已", "要", "会", "到", "去", "来",
+  "上", "下", "中", "对", "等", "着", "这是", "那个", "这个",
+]);
+
+const DAILY_INCOME_RE = "日[入赚]\\s*[0-9０-９千万]+";
+const DM_ME_RE = "(?i)\\b(dm|pm)\\s+me\\b";
+
+function clip(value, max) {
+  return String(value ?? "").slice(0, max);
+}
+
+function collapse(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function isStop(value) {
+  const parts = fold(value).split(/\s+/).filter(Boolean);
+  return parts.length > 0 && parts.every((part) => DISTILL_STOP.has(part));
+}
+
+function findField(value, fields) {
+  const needle = fold(collapse(value));
+  if (needle.length < 2) return "";
+  for (const key of ["text", "bio", "handle"]) {
+    const hay = fold(collapse(fields[key] || ""));
+    if (hay && hay.includes(needle)) return key;
+  }
+  return "";
+}
+
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function tightLinkRegex(raw) {
+  const match = collapse(raw).match(/^(?:https?:\/\/)?(?:www\.)?((?:t\.me|wa\.me|bit\.ly|tinyurl\.com)\/[A-Za-z0-9_-]{3,32})$/i);
+  if (!match) return "";
+  return `(?i)${escapeRegex(match[1])}`;
+}
+
+/** Regexes distillSuggestion is allowed to store. Model-authored regex is not. */
+export function isDistilledPattern(value) {
+  const source = String(value || "");
+  if (source === DAILY_INCOME_RE || source === DM_ME_RE) return true;
+  return /^\(\?i\)(?:t\\\.me|wa\\\.me|bit\\\.ly|tinyurl\\\.com)\/[A-Za-z0-9_-]{3,32}$/.test(source);
+}
+
+function pushDistilled(rules, seen, rule) {
+  if (!rule || rules.length >= DISTILL_CAP) return false;
+  const key = `${rule.type}|${fold(rule.value)}`;
+  if (seen.has(key)) return false;
+  seen.add(key);
+  rules.push(rule);
+  return true;
+}
+
+function coveredByLonger(rules, value) {
+  const needle = fold(collapse(value));
+  return rules.some((rule) => rule.type === "keyword" && fold(rule.value) !== needle && fold(rule.value).includes(needle));
+}
+
+function quoteSpans(reason) {
+  const text = String(reason || "");
+  const out = [];
+  const re = /["“「']([^"”」']{2,40})["”」']/g;
+  let match;
+  while ((match = re.exec(text))) out.push(match[1]);
+  return out;
+}
+
+function keywordList(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const item of raw) {
+    if (typeof item === "string") out.push(item);
+    else if (item && typeof item === "object" && item.type !== "regex" && typeof item.value === "string") out.push(item.value);
+    if (out.length >= DISTILL_CAP) break;
+  }
+  return out;
+}
+
+function readModelKeywords(parsed) {
+  return keywordList(parsed?.keywords)
+    .map((item) => collapse(item).slice(0, 40))
+    .filter((item) => item.length >= 2 && /[\p{L}\p{N}]/u.test(item));
+}
+
+function reasonPhrases(reason, fields) {
+  const words = collapse(reason).match(/[A-Za-z][A-Za-z0-9']{2,}/g) || [];
+  const hay = fold([fields.text, fields.bio].filter(Boolean).join("\n"));
+  const phrases = [];
+  for (let size = 4; size >= 2; size -= 1) {
+    for (let index = 0; index + size <= words.length; index += 1) {
+      const phrase = words.slice(index, index + size).join(" ");
+      if (phrase.length > 40 || isStop(phrase)) continue;
+      if (hay.includes(fold(phrase))) phrases.push(phrase);
+    }
+  }
+  return phrases;
+}
+
+function structuralRules(text, target) {
+  const source = String(text || "");
+  const rules = [];
+  const linkRe = /(?:https?:\/\/)?(?:www\.)?((?:t\.me|wa\.me|bit\.ly|tinyurl\.com)\/[A-Za-z0-9_-]{3,32})/gi;
+  let match;
+  while ((match = linkRe.exec(source))) {
+    const value = tightLinkRegex(match[1]);
+    if (value) rules.push({ type: "regex", target, value });
+  }
+  const contactRe = /(?:微信|薇信|vx|v信)\s*[:：]?\s*[A-Za-z0-9_-]{4,24}/gi;
+  while ((match = contactRe.exec(source))) {
+    const value = collapse(match[0]).slice(0, 40);
+    if (value.length >= 2) rules.push({ type: "keyword", target, value });
+  }
+  if (new RegExp(DAILY_INCOME_RE).test(source)) rules.push({ type: "regex", target, value: DAILY_INCOME_RE });
+  try {
+    if (compileRegex(DM_ME_RE).test(source)) rules.push({ type: "regex", target, value: DM_ME_RE });
+  } catch {
+    /* fixed pattern */
+  }
+  return rules;
+}
+
+/**
+ * Short rules from one spam/marketing suggestion.
+ * A keyword is kept only when it literally occurs in the post, bio, or handle.
+ * A regex is kept only for a fixed shape this post actually shows (short link,
+ * 日入+金额, or "dm me"). Nothing here reads the ledger or calls a model.
+ */
+export function distillSuggestion(input) {
+  const label = input?.label === "Spam" || input?.label === "Marketing" ? input.label : "";
+  if (!label) return { ok: true, rules: [] };
+  const fields = {
+    text: clip(input?.text, 2000),
+    bio: clip(input?.bio, 500),
+    handle: sanitizeHandle(input?.handle),
+  };
+  const rules = [];
+  const seen = new Set();
+  const acceptLiteral = (raw) => {
+    const collapsed = collapse(raw);
+    if (!collapsed || collapsed.length > 40) return;
+    const link = tightLinkRegex(collapsed);
+    if (link) {
+      const probe = collapsed.replace(/^https?:\/\//i, "").replace(/^www\./i, "");
+      const field = findField(probe, fields);
+      if (!field || field === "handle") return;
+      pushDistilled(rules, seen, { type: "regex", target: field, value: link });
+      return;
+    }
+    if (collapsed.length < 2 || !/[\p{L}\p{N}]/u.test(collapsed) || isStop(collapsed)) return;
+    if (fields.handle && fold(collapsed) === fold(fields.handle)) return;
+    if (coveredByLonger(rules, collapsed)) return;
+    const field = findField(collapsed, fields);
+    if (!field) return;
+    pushDistilled(rules, seen, { type: "keyword", target: field, value: collapsed });
+  };
+
+  for (const rule of structuralRules(fields.text, "text")) pushDistilled(rules, seen, rule);
+  for (const rule of structuralRules(fields.bio, "bio")) pushDistilled(rules, seen, rule);
+  for (const raw of keywordList(input?.keywords)) acceptLiteral(raw);
+  for (const quote of quoteSpans(input?.reason)) acceptLiteral(quote);
+  for (const phrase of reasonPhrases(input?.reason, fields)) acceptLiteral(phrase);
+
+  const hanRuns = String(input?.reason || "").match(/[\p{Script=Han}]{2,12}/gu) || [];
+  const cjk = [];
+  hanRuns.forEach((run, runIndex) => {
+    for (let size = Math.min(6, run.length); size >= 2; size -= 1) {
+      for (let start = 0; start + size <= run.length; start += 1) {
+        cjk.push({ runIndex, start, end: start + size, value: run.slice(start, start + size) });
+      }
+    }
+  });
+  cjk.sort((a, b) => b.value.length - a.value.length || a.start - b.start);
+  const spans = [];
+  for (const cand of cjk) {
+    if (rules.length >= DISTILL_CAP) break;
+    if (isStop(cand.value)) continue;
+    if (spans.some((span) => span.runIndex === cand.runIndex && cand.start < span.end && cand.end > span.start)) continue;
+    const before = rules.length;
+    acceptLiteral(cand.value);
+    if (rules.length > before) spans.push(cand);
+  }
+
+  for (const token of collapse(input?.reason).match(/[A-Za-z][A-Za-z0-9']{3,24}/g) || []) acceptLiteral(token);
+
+  let tags = 0;
+  for (const match of String(fields.text).matchAll(/#([\p{L}\p{N}_]{3,24})/gu)) {
+    if (tags >= 2 || rules.length >= DISTILL_CAP) break;
+    const before = rules.length;
+    acceptLiteral(match[1]);
+    if (rules.length > before) tags += 1;
+  }
+  return { ok: true, rules };
+}
+
+export function suggestPackId(packs, label) {
+  const list = Array.isArray(packs) ? packs : [];
+  const enabled = list.filter((pack) => pack && pack.id && pack.enabled !== false);
+  const tagged = enabled.find((pack) => pack.suggestTag === label);
+  const pick = tagged || enabled[0] || list.find((pack) => pack?.id);
+  return pick?.id ? String(pick.id).slice(0, 40) : "";
+}
+
+function normalizeDistilledRule(raw) {
+  const target = KEYWORD_TARGETS.includes(raw?.target) ? raw.target : "";
+  if (!target) return null;
+  if (raw?.type === "regex") {
+    const value = String(raw.value || "");
+    if (!isDistilledPattern(value)) return null;
+    try {
+      compileRegex(value);
+    } catch {
+      return null;
+    }
+    return { type: "regex", target, value };
+  }
+  const keyword = normalizeKeyword(raw?.value);
+  if (!keyword.ok || keyword.value.length < 2 || keyword.value.length > 40 || isStop(keyword.value)) return null;
+  return { type: "keyword", target, value: keyword.value };
+}
+
+/**
+ * Copy distilled rules into one existing pack.
+ * Pass `rules` to keep a confirmed subset. Each kept rule must still match a
+ * fresh distill of this same post, so a caller cannot sneak in an extra pattern.
+ * Strike counts, the queue, and the AI key are left untouched.
+ */
+export function addDistilledRules(state, input) {
+  const packId = String(input?.packId || "").slice(0, 40);
+  const pack = (state?.settings?.keywordPacks || []).find((item) => item.id === packId);
+  if (!pack) return { ok: false, error: "no-pack" };
+  const pool = distillSuggestion(input).rules;
+  const poolKeys = new Set(pool.map((rule) => `${rule.type}|${rule.target}|${fold(rule.value)}`));
+  const selected = Array.isArray(input?.rules) ? input.rules.slice(0, DISTILL_CAP) : pool;
+  const chosen = [];
+  const chosenKeys = new Set();
+  for (const raw of selected) {
+    const clean = normalizeDistilledRule(raw);
+    if (!clean) continue;
+    const key = `${clean.type}|${clean.target}|${fold(clean.value)}`;
+    if (!poolKeys.has(key) || chosenKeys.has(key)) continue;
+    chosenKeys.add(key);
+    chosen.push(clean);
+  }
+  if (!chosen.length) return { ok: false, error: "empty-keyword" };
+  if (!Array.isArray(pack.patterns)) pack.patterns = [];
+  const added = [];
+  const duplicates = [];
+  let stopped = "";
+  for (const rule of chosen) {
+    if (pack.patterns.length >= 80) {
+      stopped = "pack-full";
+      break;
+    }
+    const duplicate = pack.patterns.some((pattern) =>
+      pattern?.type === rule.type && (pattern?.target || "any") === rule.target && fold(pattern?.value) === fold(rule.value));
+    if (duplicate) {
+      duplicates.push(rule);
+      continue;
+    }
+    pack.patterns.push({ type: rule.type, target: rule.target, value: rule.value });
+    added.push(rule);
+  }
+  if (!added.length && stopped) return { ok: false, error: "pack-full" };
+  return {
+    ok: true,
+    packId: pack.id,
+    packName: pack.name,
+    added,
+    duplicates,
+    count: added.length,
+    duplicate: added.length === 0 && duplicates.length > 0,
+    stopped,
+  };
+}
+
 export function interpretAiLabel(content) {
-  if (!content) return { label: null, reason: "", verdict: "invalid" };
+  if (!content) return { label: null, reason: "", verdict: "invalid", keywords: [] };
   let text = String(content).trim().replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
   let parsed = null;
   try {
@@ -762,7 +1049,7 @@ export function interpretAiLabel(content) {
     }
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { label: null, reason: "", verdict: "invalid" };
+    return { label: null, reason: "", verdict: "invalid", keywords: [] };
   }
   const raw = String(parsed.label || parsed.tag || "").trim().toLowerCase();
   let label = null;
@@ -776,7 +1063,7 @@ export function interpretAiLabel(content) {
   } else if (raw === "none" || raw === "other" || raw === "no") {
     verdict = "none";
   }
-  return { label, reason: snippet(parsed.reason || "", 140), verdict };
+  return { label, reason: snippet(parsed.reason || "", 140), verdict, keywords: readModelKeywords(parsed) };
 }
 
 export function allowedAiEndpoint(raw) {

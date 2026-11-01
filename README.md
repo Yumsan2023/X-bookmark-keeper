@@ -1,6 +1,6 @@
 # X Toolkit — X (Twitter) 书签管家 + 打击账本 (Chrome MV3 扩展)
 
-**当前版本: 0.7.2** — 一个扩展同时包含书签库与打击账本 / Strike Ledger。本产品此前名为 Bookmark Keeper；本地书签库 IndexedDB 名仍是 `bookmark-keeper`，旧库可直接升级。0.7.1 给打击账本加上静音/屏蔽队列和限流面板。0.7.2 可以编辑关键词包（含文本导入导出），并从帖子把选中的词加进词库；命中只出黄标，不自动记一笔。
+**当前版本: 0.7.3** — 一个扩展同时包含书签库与打击账本 / Strike Ledger。本产品此前名为 Bookmark Keeper；本地书签库 IndexedDB 名仍是 `bookmark-keeper`，旧库可直接升级。0.7.1 给打击账本加上静音/屏蔽队列和限流面板。0.7.2 可以编辑关键词包（含文本导入导出），并从帖子把选中的词加进词库；命中只出黄标，不自动记一笔。0.7.3 在可选 BYOK 建议为垃圾或营销时，经你确认后把抽出的短词写入一个词库；仍然不自动记一笔。
 
 在 x.com 时间线上标记垃圾/营销的账本与书签同步共用一个工具栏图标。请卸载单独安装的 X Strike Ledger，否则两个内容脚本会同时注入。
 
@@ -11,7 +11,7 @@
 <details>
 <summary><strong>English summary</strong></summary>
 
-Chrome MV3 extension **X Toolkit**. It syncs X **bookmarks** and optional public **UserTweets** into local IndexedDB, and adds a local **Strike Ledger**: mark Spam / Marketing on the x.com timeline, then hide locally or (only if you turn it on) mute/block through X’s own menu. v0.7.1 queues mute/block (jitter of about 1s+, a daily cap, backoff, pause/resume). v0.7.2 adds editable keyword packs (including plain-text import/export) and **Add selection to keyword pack** from a tweet’s Mark menu or the right-click menu. A keyword hit still only shows the yellow Suspect chip and never adds a strike. Storage keys stay `bk_*` and `xsl` / `xslSecret`. Unload a standalone Strike Ledger install so the page is not injected twice. Mute and block stay off until you enable them. **Not verified against real X accounts** in this repo; unit tests + Mock-X e2e only. May violate X ToS; use at your own risk. MIT License.
+Chrome MV3 extension **X Toolkit**. It syncs X **bookmarks** and optional public **UserTweets** into local IndexedDB, and adds a local **Strike Ledger**: mark Spam / Marketing on the x.com timeline, then hide locally or (only if you turn it on) mute/block through X’s own menu. v0.7.1 queues mute/block (jitter of about 1s+, a daily cap, backoff, pause/resume). v0.7.2 adds editable keyword packs (including plain-text import/export) and **Add selection to keyword pack** from a tweet’s Mark menu or the right-click menu. A keyword hit still only shows the yellow Suspect chip and never adds a strike. v0.7.3 can distill one BYOK spam/marketing suggestion into short keyword rules after you confirm; that save does not add a strike and does not call the model again. Storage keys stay `bk_*` and `xsl` / `xslSecret`. Unload a standalone Strike Ledger install so the page is not injected twice. Mute and block stay off until you enable them. **Not verified against real X accounts** in this repo; unit tests + Mock-X e2e only. May violate X ToS; use at your own risk. MIT License.
 
 Step-by-step: [docs/USAGE.md](./docs/USAGE.md) · Develop: [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md) · Contribute: [CONTRIBUTING.md](./CONTRIBUTING.md)
 
@@ -72,6 +72,7 @@ Step-by-step: [docs/USAGE.md](./docs/USAGE.md) · Develop: [docs/DEVELOPMENT.md]
 | 打击账本 / Strike Ledger：时间线标记、本地折叠、阈值、关键词黄标、可选 BYOK；静音/屏蔽走 X 菜单且默认关闭 | ✅ 账本纯逻辑单测；**菜单点击未对真实 X 验证** |
 | 静音/屏蔽队列（0.7.1）：抖动、每日上限、可识别的限流退避、暂停/继续、失败重试；打击账本页的队列面板 | ✅ 队列纯逻辑单测；**菜单点击未对真实 X 验证** |
 | 关键词包（0.7.2）：启用/停用、编辑、文本导入导出；从帖子「标记」或右键把选中词加入词库；可选命中记录。命中只出黄标 | ✅ 词库纯逻辑单测；**右键菜单未对真实 X 验证** |
+| AI 建议蒸馏（0.7.3）：垃圾/营销建议可经确认存为短关键词或紧规则，一次写入所选词库。不自动记一笔，不批量请求模型 | ✅ 蒸馏纯逻辑单测；**建议芯片未对真实 X / 真实 LLM 验证** |
 
 ---
 
@@ -154,6 +155,19 @@ npm test               # 建议先跑通单元测试
 选项页 **打击账本 → 关键词包** 可以启用/停用每个包、改名称和建议标签、逐条改规则。下面的 **词库文本** 用纯文本编辑整套词库：`[包名]` 开头，接着可选 `id:` / `enabled:` / `suggest:`，然后每行一条。没有 `[包名]` 的纯词表会导入成一个名为 `Imported` 的包。点 **应用文本** 只更新表单，再点 **保存** 才写入。**导出文本** / **导入文本** 走 `.txt`。
 
 **命中记录**默认关闭。打开「记录关键词命中（调试）」后，黄标会在本机留下最多 40 条短记录（词、包、账号、摘要），便于看规则为什么响。可以清空。这条记录**不会**增加打击次数。
+
+### 把一条 AI 建议蒸馏进关键词包（0.7.3）
+
+AI 建议默认关闭。密钥仍只在 `xslSecret`，不进词库，也不进书签库的 LLM 设置。蒸馏不会自己记一笔，也不会把时间线上的帖子批量发给模型。
+
+1. 重新构建并加载 `dist/`（版本 0.7.3）。选项页 **打击账本 → AI 建议** 打开「启用 BYOK 建议」，填写端点、模型和 API key，然后保存。不打开时，时间线上没有「让 AI 看一看」。
+2. 打开 x.com 上的一条帖子。点 **让 AI 看一看**。同一条帖子的正文、简介和用户名会先按内容哈希查本地缓存；命中缓存就不会再请求。自动询问只在你另外打开「只对黄标可疑帖自动询问」时，对已经是黄标的那一条生效，仍然一条一条来。
+3. 若芯片变成 **AI 建议垃圾** 或 **AI 建议营销**，点它。面板列出从这条建议抽出的短规则：模型原文里出现、并且帖子里确实有的短语；原因里用引号标出、并且帖子里有的片段；短链、`微信:` 一类联系方式、`日入`+金额、`dm me` 这类紧规则。没有抽出短词时，面板不显示保存按钮。
+4. 选一个关键词包（会优先选已启用、且建议标签与这次判断一致的包）。点 **存为关键词**。勾选的规则一次写入该包。这一下**不**记打击。
+5. **确认记一笔** 仍是旁边单独的按钮。只有点它才会给这个账号加一次垃圾或营销。保存关键词不会顺手点它。
+6. 之后别的帖子若命中这些词，只出黄色 **可疑**。要记账，仍需你自己确认。
+
+「认为不像」的结果没有可保存的规则。关掉 AI 或清掉 key 之后，不会再发起新的建议请求。
 
 ---
 

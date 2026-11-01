@@ -96,6 +96,9 @@ input[type="text"], select {
 .kw { display: grid; gap: 8px; margin: 4px 0 8px; }
 .kw .row { margin-top: 0; }
 .check { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 13px; }
+.rules { display: grid; gap: 6px; margin: 8px 0; max-height: 180px; overflow: auto; }
+.rules label { margin: 0; }
+.sheet > select { width: 100%; margin-bottom: 4px; }
 @media (min-width: 720px) {
   .backdrop { align-items: center; }
 }
@@ -295,6 +298,56 @@ export function openChoice(shadow, model) {
           for (const [id, input] of Object.entries(inputs)) checks[id] = input.checked && !input.disabled;
           finish({ confirm: true, checks });
         },
+      }),
+    ]));
+  });
+}
+
+export function openAiSuggest(shadow, model) {
+  return openSheet(shadow, (sheet, finish) => {
+    sheet.append(el("h2", { text: model.title }));
+    if (model.body) sheet.append(el("p", { text: model.body }));
+    if (model.note) sheet.append(el("p", { text: model.note }));
+    const boxes = [];
+    const rules = model.rules || [];
+    if (rules.length) {
+      const list = el("div", { class: "rules" });
+      for (const rule of rules) {
+        const input = el("input", { type: "checkbox", checked: true });
+        boxes.push({ input, rule });
+        list.append(el("label", {}, [input, rule.label || rule.value || ""]));
+      }
+      sheet.append(list);
+      const select = el("select", { "aria-label": model.packLabel || "" });
+      for (const pack of model.packs || []) {
+        select.append(el("option", { value: pack.id, text: pack.name, selected: pack.id === model.packId }));
+      }
+      sheet.append(select);
+    }
+    const saveRules = () => {
+      const select = sheet.querySelector("select");
+      const picked = boxes.filter((item) => item.input.checked).map((item) => ({
+        type: item.rule.type,
+        target: item.rule.target,
+        value: item.rule.value,
+      }));
+      finish({ save: true, packId: select?.value || "", rules: picked });
+    };
+    sheet.append(el("div", { class: "row" }, [
+      el("button", { type: "button", text: model.cancel, onClick: () => finish(null) }),
+      rules.length
+        ? el("button", {
+          type: "button",
+          text: model.save,
+          disabled: !(model.packs || []).length,
+          onClick: saveRules,
+        })
+        : null,
+      el("button", {
+        class: "primary",
+        type: "button",
+        text: model.confirm,
+        onClick: () => finish({ confirm: true }),
       }),
     ]));
   });

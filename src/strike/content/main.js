@@ -4,15 +4,17 @@ import { loadDict, translate } from "../lib/i18n.js";
 import {
   canonicalTag,
   contentHash,
+  distillSuggestion,
   eventMatchesShortcut,
   isRateLimitSignal,
   isTypingTarget,
   matchRules,
   resolveLang,
+  suggestPackId,
   tagLabel,
 } from "../lib/pure.js";
 import { performPlatformAction } from "./act.js";
-import { createOverlay, mountBar, openChoice, openPicker, toast } from "./view.js";
+import { createOverlay, mountBar, openAiSuggest, openChoice, openPicker, toast } from "./view.js";
 
 const expanded = new Set();
 const aiAsked = new Set();
@@ -455,6 +457,8 @@ async function confirmRule(article) {
 }
 
 async function askAi(meta) {
+  // One in-flight cap, one ask per tweet id, and the service worker caches by content hash.
+  // Distilling keywords does not call the model again.
   if (aiInflight >= 2) return;
   aiInflight += 1;
   aiAsked.add(meta.tweetId);
@@ -480,14 +484,53 @@ async function confirmAi(article) {
     if (result?.verdict === "none") toast(overlay, t("aiNone"));
     return;
   }
-  const choice = await withOverlay(() => openChoice(overlay, {
+  const settings = snapshot?.settings || {};
+  const distilled = distillSuggestion({
+    label: result.label,
+    reason: result.reason,
+    text: meta.text,
+    bio: meta.bio,
+    handle: meta.handle,
+    keywords: result.keywords,
+  });
+  const packs = (settings.keywordPacks || []).map((pack) => ({ id: pack.id, name: pack.name }));
+  const choice = await withOverlay(() => openAiSuggest(overlay, {
     title: t("aiChip", { tag: tagLabel(result.label, lang) }),
     body: result.reason || t("subtitle"),
-    checks: [],
+    note: distilled.rules.length ? t("distillNote") : "",
+    rules: distilled.rules.map((rule) => ({
+      type: rule.type,
+      target: rule.target,
+      value: rule.value,
+      label: `${t(rule.target)} · ${rule.value}`,
+    })),
+    packs,
+    packId: suggestPackId(settings.keywordPacks, result.label),
+    packLabel: t("addKeywordPack"),
+    save: t("saveAsRule"),
     confirm: t("ruleMark"),
     cancel: t("cancel"),
   }));
-  if (choice?.confirm) await markTag(meta, result.label, "ai");
+  if (!choice) return;
+  if (choice.save) {
+    const saved = await send({
+      type: "ADD_DISTILLED",
+      packId: choice.packId,
+      rules: choice.rules,
+      label: result.label,
+      reason: result.reason,
+      text: meta.text,
+      bio: meta.bio,
+      handle: meta.handle,
+      keywords: result.keywords,
+    });
+    if (!saved?.ok) toast(overlay, t(saved?.error || "empty-keyword"));
+    else if (!saved.count && saved.duplicate) toast(overlay, t("distillDuplicate", { pack: saved.packName }));
+    else if (saved.duplicates?.length) toast(overlay, t("distillPartial", { count: saved.count, dup: saved.duplicates.length, pack: saved.packName }));
+    else toast(overlay, t("distillAdded", { count: saved.count, pack: saved.packName }));
+    return;
+  }
+  if (choice.confirm) await markTag(meta, result.label, "ai");
 }
 
 function render(article, meta) {
