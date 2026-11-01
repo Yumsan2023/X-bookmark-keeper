@@ -72,6 +72,10 @@ export async function mountStrikeOptions(root) {
     for (const id of ["hideOnThreshold", "muteOnThreshold", "blockOnThreshold", "enablePlatformActions", "rulesEnabled", "hitHistory", "libraryChipFromStrikes", "bookmarkMarkAddsStrike"]) {
       $(`#${id}`).checked = !!draft[id];
     }
+    $("#commentScanEnabled").checked = !!draft.commentScanEnabled;
+    const commentMode = draft.commentHitMode === "prompt" ? "prompt" : "fold";
+    const commentModeInput = root.querySelector(`input[name="commentHitMode"][value="${commentMode}"]`);
+    if (commentModeInput) commentModeInput.checked = true;
     $("#libraryChipThreshold").value = draft.libraryChipThreshold ?? 3;
     $("#dailyCap").value = draft.dailyCap;
     $("#rateLimitMs").value = draft.rateLimitMs;
@@ -429,6 +433,8 @@ export async function mountStrikeOptions(root) {
     for (const id of ["hideOnThreshold", "muteOnThreshold", "blockOnThreshold", "enablePlatformActions", "rulesEnabled", "hitHistory", "libraryChipFromStrikes", "bookmarkMarkAddsStrike"]) {
       draft[id] = $(`#${id}`).checked;
     }
+    draft.commentScanEnabled = $("#commentScanEnabled").checked;
+    draft.commentHitMode = root.querySelector('input[name="commentHitMode"]:checked')?.value === "prompt" ? "prompt" : "fold";
     draft.libraryChipThreshold = Number($("#libraryChipThreshold").value);
     draft.dailyCap = Number($("#dailyCap").value);
     draft.rateLimitMs = Number($("#rateLimitMs").value);

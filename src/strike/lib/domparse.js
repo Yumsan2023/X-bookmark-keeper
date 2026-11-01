@@ -2,7 +2,57 @@
  * Read author, status id, text, and follow state from an X article.
  * Selectors follow public data-testid hooks (article, User-Name, tweetText,
  * caret, follow/unfollow). Quote posts are ignored so the outer author wins.
+ *
+ * On a tweet detail page the focal post and each reply are the same kind of
+ * node: `article[data-testid="tweet"]` (also `article[role="article"]`).
+ * The focal card is the one whose /status/ id equals the URL. Other tweet
+ * articles on that page are replies. This file does not call GraphQL.
  */
+
+/** Tweet cards on the home timeline and on a status thread. */
+export const TWEET_ARTICLE_SELECTOR = 'article[data-testid="tweet"], article[role="article"]';
+
+/**
+ * Status id of the open tweet, or "" when this path is not a detail thread.
+ * `/user/status/123`, `/i/status/123`, `/i/web/status/123`, and the photo/video
+ * viewer count. Quotes, likes, retweets, and analytics do not.
+ * @param {string} pathname
+ * @returns {string}
+ */
+export function focalStatusId(pathname) {
+  const path = String(pathname || "").split("?")[0].split("#")[0].replace(/\/+$/, "") || "/";
+  const web = path.match(/^\/i\/web\/status(?:es)?\/(\d+)(?:\/(?:photo|video)\/\d+)?$/);
+  if (web) return web[1];
+  const match = path.match(/^\/(?:[A-Za-z0-9_]{1,15}|i)\/status(?:es)?\/(\d+)(?:\/(?:photo|video)\/\d+)?$/);
+  return match ? match[1] : "";
+}
+
+/**
+ * "timeline" off a detail thread, "focal" for the status in the URL (or a card
+ * whose id we could not read — do not comment-fold that), "reply" otherwise.
+ * @param {string} pathname
+ * @param {string} [tweetId]
+ * @returns {"timeline" | "focal" | "reply"}
+ */
+export function articleSurface(pathname, tweetId) {
+  const focal = focalStatusId(pathname);
+  if (!focal) return "timeline";
+  if (!tweetId || !/^\d+$/.test(String(tweetId))) return "focal";
+  return String(tweetId) === focal ? "focal" : "reply";
+}
+
+/**
+ * Quote embeds and cards nested inside another tweet article are not their
+ * own reply. `closest` includes the node itself, so the walk starts at the parent.
+ * @param {{ closest?: (selector: string) => unknown, parentElement?: { closest?: (selector: string) => unknown } | null } | null | undefined} article
+ */
+export function isNestedTweetArticle(article) {
+  if (!article || typeof article.closest !== "function") return false;
+  const parent = article.parentElement;
+  if (!parent || typeof parent.closest !== "function") return false;
+  if (parent.closest('[data-testid="quoteTweet"]')) return true;
+  return !!parent.closest(TWEET_ARTICLE_SELECTOR);
+}
 
 const RESERVED = new Set([
   "home", "explore", "search", "notifications", "messages", "settings", "i",
