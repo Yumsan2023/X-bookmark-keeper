@@ -12,12 +12,12 @@ import {
   addCustomTag,
   beginAction,
   cancelAction,
+  clearQueue,
   clearTag,
   contentHash,
   deleteAccount,
   describeUndo,
   enqueue,
-  expireInflight,
   exportData,
   finishAction,
   freshState,
@@ -25,12 +25,16 @@ import {
   interpretAiLabel,
   normalizeState,
   peekAction,
+  processorHold,
   pruneAiCache,
   publicAccount,
+  queueDashboard,
   removeCustomTag,
   restorePacks,
   retryAction,
+  retryFailed,
   sanitizeHandle,
+  setQueuePaused,
   sanitizeSettings,
   searchLedger,
   seenAccount,
@@ -198,6 +202,7 @@ export function dispatch(message, sender = {}) {
           stats: statsOf(state, now),
           ledger: searchLedger(state, message.query || "", message.limit || 200),
           queue: state.queue,
+          dashboard: queueDashboard(state, now),
           log: state.log.slice(0, 30),
           undo: describeUndo(state.undo[0]),
         };
@@ -258,10 +263,16 @@ export function dispatch(message, sender = {}) {
         break;
       }
       case "PEEK_ACTION": {
-        const changed = expireInflight(state, now);
-        const item = peekAction(state, now);
-        result = { ok: true, item, changed };
-        if (!changed && !item) return result;
+        const holdInfo = processorHold(state, now);
+        const handles = Array.isArray(message.handles) ? message.handles.slice(0, 80) : null;
+        const item = holdInfo.hold ? null : peekAction(state, now, handles ? { handles } : {});
+        result = {
+          ok: true,
+          item,
+          changed: !!holdInfo.changed,
+          hold: holdInfo.hold,
+          wait: holdInfo.wait || 0,
+        };
         break;
       }
       case "BEGIN_ACTION":
@@ -274,6 +285,25 @@ export function dispatch(message, sender = {}) {
         const denied = editorOnly(sender);
         if (denied) return denied;
         result = retryAction(state, message.id);
+        break;
+      }
+      case "RETRY_FAILED": {
+        const denied = editorOnly(sender);
+        if (denied) return denied;
+        result = retryFailed(state);
+        break;
+      }
+      case "SET_QUEUE_PAUSED": {
+        const denied = editorOnly(sender);
+        if (denied) return denied;
+        result = setQueuePaused(state, !!message.paused, now);
+        break;
+      }
+      case "CLEAR_QUEUE": {
+        const denied = editorOnly(sender);
+        if (denied) return denied;
+        const scope = message.scope === "failed" || message.scope === "all" ? message.scope : "pending";
+        result = clearQueue(state, scope);
         break;
       }
       case "CANCEL_ACTION": {
@@ -323,8 +353,8 @@ export function dispatch(message, sender = {}) {
     const reads = new Set(["ENSURE", "GET_PUBLIC", "GET_EDITOR", "SEARCH", "PEEK_UNDO", "STATS"]);
     const peekChanged = type === "PEEK_ACTION" && result?.changed;
     if (type === "PEEK_ACTION" && !peekChanged) return result;
-    const failedBegin = type === "BEGIN_ACTION" && result?.ok === false && result?.expired;
-    if (result?.ok === false && !failedBegin) return result;
+    const beginWrites = type === "BEGIN_ACTION" && result?.ok === false && (result?.expired || result?.changed);
+    if (result?.ok === false && !beginWrites) return result;
     if (reads.has(type)) return result;
     await writeRaw(state);
     if (result && typeof result === "object" && result.settings) {

@@ -1,6 +1,6 @@
 # X Toolkit — X (Twitter) 书签管家 + 打击账本 (Chrome MV3 扩展)
 
-**当前版本: 0.7.0** — 一个扩展同时包含书签库与打击账本 / Strike Ledger。本产品此前名为 Bookmark Keeper；本地书签库 IndexedDB 名仍是 `bookmark-keeper`，旧库可直接升级。
+**当前版本: 0.7.1** — 一个扩展同时包含书签库与打击账本 / Strike Ledger。本产品此前名为 Bookmark Keeper；本地书签库 IndexedDB 名仍是 `bookmark-keeper`，旧库可直接升级。0.7.1 给打击账本加上静音/屏蔽队列和限流面板。
 
 在 x.com 时间线上标记垃圾/营销的账本与书签同步共用一个工具栏图标。请卸载单独安装的 X Strike Ledger，否则两个内容脚本会同时注入。
 
@@ -11,7 +11,7 @@
 <details>
 <summary><strong>English summary</strong></summary>
 
-Chrome MV3 extension **X Toolkit**. It syncs X **bookmarks** and optional public **UserTweets** into local IndexedDB, and adds a local **Strike Ledger**: mark Spam / Marketing on the x.com timeline, then hide locally or (only if you turn it on) mute/block through X’s own menu. v0.7.0 is one extension, version 0.7.0, storage keys `bk_*` for bookmarks and `xsl` / `xslSecret` for the ledger. Unload a standalone Strike Ledger install so the page is not injected twice. Mute and block stay off until you enable them. **Not verified against real X accounts** in this repo; unit tests + Mock-X e2e only. May violate X ToS; use at your own risk. MIT License.
+Chrome MV3 extension **X Toolkit**. It syncs X **bookmarks** and optional public **UserTweets** into local IndexedDB, and adds a local **Strike Ledger**: mark Spam / Marketing on the x.com timeline, then hide locally or (only if you turn it on) mute/block through X’s own menu. v0.7.1 keeps that one extension (storage keys `bk_*` and `xsl` / `xslSecret`) and queues mute/block instead of clicking them in a burst: jitter of about 1s+, a daily cap, backoff when a rate-limit notice is visible, and pause/resume on the Strike tab. Unload a standalone Strike Ledger install so the page is not injected twice. Mute and block stay off until you enable them. **Not verified against real X accounts** in this repo; unit tests + Mock-X e2e only. May violate X ToS; use at your own risk. MIT License.
 
 Step-by-step: [docs/USAGE.md](./docs/USAGE.md) · Develop: [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md) · Contribute: [CONTRIBUTING.md](./CONTRIBUTING.md)
 
@@ -70,6 +70,7 @@ Step-by-step: [docs/USAGE.md](./docs/USAGE.md) · Develop: [docs/DEVELOPMENT.md]
 | 多账号书签归属（v0.5）：`accounts` 记录收藏者；删除只动当前登录账号；其他账号的帖子跳过 | ✅ 单测 |
 | 库视图（v0.6）：侧栏、媒体画廊、按引用原文归组、重复项（不自动删除） | ✅ 归组单测；界面随构建 |
 | 打击账本 / Strike Ledger：时间线标记、本地折叠、阈值、关键词黄标、可选 BYOK；静音/屏蔽走 X 菜单且默认关闭 | ✅ 账本纯逻辑单测；**菜单点击未对真实 X 验证** |
+| 静音/屏蔽队列（0.7.1）：抖动、每日上限、可识别的限流退避、暂停/继续、失败重试；打击账本页的队列面板 | ✅ 队列纯逻辑单测；**菜单点击未对真实 X 验证** |
 
 ---
 
@@ -116,7 +117,18 @@ npm test               # 建议先跑通单元测试
 
 选项页侧栏 **打击账本** 可以改阈值、确认/自动/仅提示、快捷键、关键词包、导入导出。Popup 只有一个，里面有进入账本设置的入口。
 
-静音和屏蔽 **默认关闭**。打开「允许通过 X 的菜单执行静音/屏蔽」后，扩展会去点帖子上 X 自己的「更多」菜单再点 Mute/Block。这是在替你操作网页，不是官方 API，也 **没有** 接到本扩展的 GraphQL DeleteBookmark / 凭证捕获路径。页面改版可能点不到；失败会排队重试。不要用自动模式配合屏蔽做批量封禁。本地折叠不访问 X。
+静音和屏蔽 **默认关闭**。打开「允许通过 X 的菜单执行静音/屏蔽」后，扩展会去点帖子上 X 自己的「更多」菜单再点 Mute/Block。这是在替你操作网页，不是官方 API，也 **没有** 接到本扩展的 GraphQL DeleteBookmark / 凭证捕获路径。页面改版可能点不到；失败会留在队列里重试。不要用自动模式配合屏蔽做批量封禁。本地折叠不访问 X。
+
+### 在时间线上试静音/屏蔽队列
+
+达到阈值，或你在「标记」面板里点「排队静音 / 排队屏蔽」时，动作只进入本地队列，不会在页面上连点。打开的时间线每次只处理一条能看见的账号：间隔不少于设置值，再加约 1–2.5 秒抖动；有每日上限；若页面上出现能识别的限流提示（例如 429）会退避。选项页 **打击账本 → 队列与限流** 显示队列长度、失败项、最近错误、今日已用/上限，并可暂停、继续、重试失败项、清空等待或失败项。
+
+自动 / 确认 / 仅提示仍然有效。白名单和你关注的账号不会被自动入队；关注状态未知时也不会自动静音或屏蔽。仅提示只出通知。仍只点 X 自己的菜单。
+
+1. 重新构建并加载 `dist/`。选项页打开「允许通过 X 的菜单执行静音/屏蔽」，每日上限可先设小（例如 3）。模式用 **确认** 更稳妥。
+2. 打开 x.com 时间线，对一个你没有关注、且不在白名单的账号点「标记」→「排队静音」。也可以把垃圾标记到阈值，在确认框里勾选静音或屏蔽。
+3. 留在能看到该账号帖子的时间线。扩展会按队列去点 X 的「更多」菜单，而不是把队列一次点完。
+4. 回到 **队列与限流** 看长度、失败和今日用量。可暂停后再继续。失败项可以单条或整批重试。
 
 书签同步里的 “timeline” 是 UserTweets 抓取；打击账本里的时间线是页面上的标记/折叠。两套消息类型分开（书签是 `timeline/start` 这类，账本是 `MARK` / `SET_HIDDEN` 这类）。
 

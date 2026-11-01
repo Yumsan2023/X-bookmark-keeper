@@ -5,6 +5,7 @@ import {
   canonicalTag,
   contentHash,
   eventMatchesShortcut,
+  isRateLimitSignal,
   isTypingTarget,
   matchRules,
   resolveLang,
@@ -25,6 +26,7 @@ let overlay = null;
 let overlayBusy = false;
 let pumping = false;
 let capNotified = "";
+let backoffNotified = 0;
 let aiInflight = 0;
 let scanTimer = 0;
 
@@ -204,7 +206,12 @@ async function afterThreshold(result, meta) {
       block: threshold.suggest.block,
       reason: "threshold-auto",
     });
-    const actions = (applied.done || []).map((name) => t(name === "hide" ? "hideAction" : name)).join(lang === "zh" ? "、" : ", ");
+    const actions = (applied.done || []).map((name) => {
+      if (name === "hide") return t("hideAction");
+      if (name === "mute") return t("muteQueued");
+      if (name === "block") return t("blockQueued");
+      return t(name);
+    }).join(lang === "zh" ? "、" : ", ");
     toast(overlay, t("autoDone", { handle: meta.handle, actions: actions || t("justRecord") }));
     if ((applied.done || []).some((name) => name === "mute" || name === "block")) pump();
     return;
@@ -246,6 +253,7 @@ async function afterThreshold(result, meta) {
     reason: "threshold-confirm",
   });
   if (!applied.ok && applied.error === "platform-off") toast(overlay, t("platformOff"));
+  else if (choice.checks.mute || choice.checks.block) toast(overlay, t("queuedConfirm", { handle: meta.handle }));
   else toast(overlay, t("confirmed", { handle: meta.handle }));
   if (choice.checks.mute || choice.checks.block) pump();
 }
@@ -317,9 +325,25 @@ async function openTags(article) {
     whitelistLabel: t("whitelistToggle"),
     hidden: !!record?.hidden,
     hideLabel: record?.hidden ? t("unhide") : t("hide"),
+    queueMute: settings.enablePlatformActions ? t("queueMute") : "",
+    queueBlock: settings.enablePlatformActions ? t("queueBlock") : "",
     cancel: t("cancel"),
   }));
   if (!action) return;
+  if (action.type === "queue") {
+    const queued = await send({
+      type: "APPLY_ACTIONS",
+      userId: meta.userId,
+      handle: meta.handle,
+      mute: action.action === "mute",
+      block: action.action === "block",
+      reason: "manual",
+    });
+    if (!queued?.ok) toast(overlay, t(queued?.error || "platform-off"));
+    else toast(overlay, t("queued", { action: t(action.action), handle: meta.handle }));
+    if (queued?.ok) pump();
+    return;
+  }
   if (action.type === "toggle") await toggleTag(meta, action.tag);
   if (action.type === "add") {
     const added = await send({ type: "ADD_CUSTOM_TAG", name: action.name });
@@ -530,6 +554,18 @@ async function onKey(event) {
   }
 }
 
+function visibleQueueHandles() {
+  const handles = [];
+  for (const article of document.querySelectorAll("article[data-xsl-handle]")) {
+    const caret = article.querySelector('[data-testid="caret"]')
+      || article.querySelector('button[aria-label="More"], button[aria-label="更多"]');
+    if (!caret || !article.dataset.xslHandle) continue;
+    handles.push(article.dataset.xslHandle);
+    if (handles.length >= 80) break;
+  }
+  return handles;
+}
+
 function findArticle(handle) {
   const want = String(handle || "").toLowerCase();
   const matches = [...document.querySelectorAll("article[data-xsl-handle]")].filter((article) => article.dataset.xslHandle === want);
@@ -543,19 +579,36 @@ function findArticle(handle) {
 }
 
 async function pump() {
-  if (pumping || overlayBusy || document.visibilityState === "hidden" || !snapshot?.settings?.enablePlatformActions) return;
+  if (pumping || overlayBusy || document.visibilityState === "hidden") return;
   pumping = true;
   try {
-    const peek = await send({ type: "PEEK_ACTION" });
-    if (!peek?.item) return;
+    const peek = await send({ type: "PEEK_ACTION", handles: visibleQueueHandles() });
+    if (peek?.hold === "daily-cap") {
+      const day = snapshot?.rate?.day || "";
+      if (capNotified !== day) {
+        capNotified = day || new Date().toDateString();
+        toast(overlay, t("daily-cap"));
+      }
+      return;
+    }
+    if (peek?.hold === "backoff") {
+      const until = snapshot?.rate?.backoffUntil || 0;
+      if (until && backoffNotified !== until) {
+        backoffNotified = until;
+        toast(overlay, t("rateLimited"));
+      }
+      return;
+    }
+    if (peek?.hold || !peek?.item) return;
     const article = findArticle(peek.item.handle);
     if (!article) return;
     const begun = await send({ type: "BEGIN_ACTION", id: peek.item.id });
     if (!begun?.ok) {
-      if (begun?.error === "daily-cap" && capNotified !== snapshot?.rateDay) {
-        capNotified = new Date().toDateString();
+      if (begun?.error === "daily-cap" && capNotified !== (snapshot?.rate?.day || "")) {
+        capNotified = snapshot?.rate?.day || new Date().toDateString();
         toast(overlay, t("daily-cap"));
       }
+      if (begun?.error === "backoff") toast(overlay, t("rateLimited"));
       return;
     }
     try {
@@ -563,8 +616,17 @@ async function pump() {
       await send({ type: "FINISH_ACTION", id: begun.item.id, ok: true });
       toast(overlay, t("actionOk", { action: t(begun.item.type), handle: begun.item.handle }));
     } catch (error) {
-      await send({ type: "FINISH_ACTION", id: begun.item.id, ok: false, error: error?.message || "no-item" });
-      toast(overlay, t("actionFail", { error: t(error?.message || "no-item") }));
+      const detail = `${error?.detail || ""} ${error?.message || ""}`;
+      const rateLimited = error?.rateLimited === true || isRateLimitSignal(detail);
+      const finished = await send({
+        type: "FINISH_ACTION",
+        id: begun.item.id,
+        ok: false,
+        error: rateLimited ? (error?.detail || error?.message || "rate-limit") : (error?.message || "no-item"),
+        rateLimited,
+      });
+      if (rateLimited && finished?.backoffUntil) backoffNotified = finished.backoffUntil;
+      toast(overlay, rateLimited ? t("rateLimited") : t("actionFail", { error: t(error?.message || "no-item") }));
     }
   } finally {
     pumping = false;

@@ -99,6 +99,7 @@ button:disabled { opacity: 0.45; }
 #status { min-height: 1.3em; font-weight: 650; }
 #status.bad { color: var(--margin); }
 #status.ok { color: var(--ok); }
+.queue-error { color: var(--margin); }
 
 @media (max-width: 800px) {
   .wrap { padding: 20px 14px 48px 36px; }
