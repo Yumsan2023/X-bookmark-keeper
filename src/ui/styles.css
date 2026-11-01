@@ -103,9 +103,20 @@ mark { background:#ffe58a; color:#222; border-radius:2px; padding:0 1px; }
 .card-foot { display:flex; gap:8px; align-items:center; flex-wrap:wrap; font-size:12.5px; }
 .tags { display:flex; gap:4px; flex-wrap:wrap; } .tag { background: color-mix(in srgb, var(--accent) 15%, var(--card)); border-radius:10px; padding:0 8px; font-size:12px; }
 .badge { background:var(--border); border-radius:10px; padding:0 8px; font-size:12px; } .badge.bad { background:#fbd0cc; color:#8a1c14; } .badge.warn { background:#ffe8b3; color:#7a4b00; }
-.badge.author-marketing, .badge.author-spam { margin-left: 4px; font-size: 11px; font-weight: 650; }
+.badge.author-marketing, .badge.author-spam, .badge.author-plain { margin-left: 4px; font-size: 11px; font-weight: 650; }
 .badge.author-marketing { background: color-mix(in srgb, var(--warn) 22%, var(--card)); color: var(--warn); }
 .badge.author-spam { background: color-mix(in srgb, var(--danger) 18%, var(--card)); color: var(--danger); }
+.badge.author-plain { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+.card.fx-outline-spam, .lib-table tr.fx-outline-spam td:first-child, .media-gallery-item.fx-outline-spam {
+  box-shadow: inset 3px 0 0 var(--danger);
+}
+.card.fx-outline-marketing, .lib-table tr.fx-outline-marketing td:first-child, .media-gallery-item.fx-outline-marketing {
+  box-shadow: inset 3px 0 0 var(--warn);
+}
+.card.card-sel.fx-outline-spam { box-shadow: inset 3px 0 0 var(--danger), 0 0 0 1px var(--accent); }
+.card.card-sel.fx-outline-marketing { box-shadow: inset 3px 0 0 var(--warn), 0 0 0 1px var(--accent); }
+.lib-child-row.fx-outline-spam { border-left-color: var(--danger); }
+.lib-child-row.fx-outline-marketing { border-left-color: var(--warn); }
 .author-marks { display: inline-flex; flex-wrap: wrap; gap: 4px; }
 .author-flag-actions { display: inline-flex; flex-wrap: wrap; gap: 4px; }
 .author-flag-btn {

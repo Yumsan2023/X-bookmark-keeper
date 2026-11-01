@@ -1,6 +1,6 @@
 import { send } from "../lib/client.js";
 import { loadDict, translate } from "../lib/i18n.js";
-import { allowedCommunityUrl, communityPermissionOrigin, packsToText, parseKeywordPackText, resolveLang, shortcutFromEvent, tagLabel } from "../lib/pure.js";
+import { allowedCommunityUrl, communityPermissionOrigin, DEFAULT_TAG_EFFECT, packsToText, parseKeywordPackText, resolveLang, shortcutFromEvent, TAG_EFFECT_IDS, tagLabel } from "../lib/pure.js";
 
 /** Mount the strike options UI inside a shadow root (or any parent). */
 export async function mountStrikeOptions(root) {
@@ -96,6 +96,7 @@ export async function mountStrikeOptions(root) {
     $("#apiKey").value = draft.ai.apiKey || "";
     keyDirty = false;
     $("#pack-text").value = packsToText(draft.keywordPacks);
+    if (!draft.tagEffects || typeof draft.tagEffects !== "object") draft.tagEffects = {};
     renderThresholds();
     renderPacks();
     renderVetoes();
@@ -123,6 +124,7 @@ export async function mountStrikeOptions(root) {
       if (name !== "Spam" && name !== "Marketing") {
         label.append(button(t("remove"), () => {
           draft.customTags = draft.customTags.filter((tag) => tag !== name);
+          if (draft.tagEffects) delete draft.tagEffects[name];
           renderThresholds();
         }));
       }
@@ -148,6 +150,36 @@ export async function mountStrikeOptions(root) {
     }));
     form.addEventListener("submit", (event) => event.preventDefault());
     root.append(form);
+    renderTagEffects();
+  }
+
+  function renderTagEffects() {
+    const box = $("#tag-effects");
+    if (!box) return;
+    box.replaceChildren();
+    if (!draft.tagEffects || typeof draft.tagEffects !== "object") draft.tagEffects = {};
+    const names = ["Spam", "Marketing", ...(draft.customTags || [])];
+    for (const name of names) {
+      const label = document.createElement("label");
+      const span = document.createElement("span");
+      span.textContent = tagLabel(name, lang);
+      const select = document.createElement("select");
+      const current = TAG_EFFECT_IDS.includes(draft.tagEffects[name]) ? draft.tagEffects[name] : DEFAULT_TAG_EFFECT;
+      select.setAttribute("aria-label", t("tagEffectFor", { tag: tagLabel(name, lang) }));
+      for (const id of ["chip", "none", "outline", "fold"]) {
+        const option = document.createElement("option");
+        option.value = id;
+        option.textContent = t(`tagEffect_${id}`);
+        option.selected = id === current;
+        select.append(option);
+      }
+      select.addEventListener("change", () => {
+        if (select.value === DEFAULT_TAG_EFFECT) delete draft.tagEffects[name];
+        else draft.tagEffects[name] = select.value;
+      });
+      label.append(span, select);
+      box.append(label);
+    }
   }
 
   function renderPacks() {

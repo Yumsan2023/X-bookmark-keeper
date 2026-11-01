@@ -20,12 +20,26 @@
  * ruleEnqueueGate then keeps that hit from queueing mute or block. Another
  * pattern that still allows enqueue can queue once the tag threshold is met.
  * Missing `enqueue` means allowed, which is the previous behavior.
+ * settings.tagEffects only changes how a tag is painted (chip, none, outline, fold).
+ * It does not change strikes, queueing, whitelist, follow, or community lists.
  */
 
 import {
   emptyAuthorFlags,
   libraryMarksForAccount,
   normalizeAuthorFlags,
+  sanitizeTagEffects,
+} from "./author-flags.js";
+
+export {
+  bookmarkOutlineClass,
+  decorateTagChips,
+  DEFAULT_TAG_EFFECT,
+  foldAccent,
+  libraryAuthorDecor,
+  TAG_EFFECT_IDS,
+  tagEffectFor,
+  tagEffectTone,
 } from "./author-flags.js";
 
 export const SCHEMA = 1;
@@ -496,6 +510,11 @@ export function defaultSettings() {
     libraryChipThreshold: 3,
     /** Bookmark "mark author" also records one strike. Off: chip only, no queue. */
     bookmarkMarkAddsStrike: false,
+    /**
+     * Display only. Missing tag means the existing colored chip.
+     * none: neutral chip. outline: thin card edge. fold: collapse-bar accent.
+     */
+    tagEffects: {},
     /**
      * Days a false-positive veto cools the matched keyword.
      * 0 = stay off until the user undoes it. Does not expire exceptions.
@@ -1325,6 +1344,7 @@ function reasonRank(reason) {
  *   extra: number,
  *   aiLabel: string,
  *   tagText: string,
+ *   tag: string,
  *   details: Array<{ packName: string, pattern: string, suggestTag: string, cooled: boolean, regex: boolean }>,
  * }}
  */
@@ -1350,10 +1370,12 @@ export function foldReasonSummary(input = {}) {
   if (!indexed.length && !ai && !tags.length) return null;
   if (indexed.length) {
     let primary = null;
+    let primaryReason = null;
     for (const row of indexed) {
       const hit = readableHit(row.reason);
       if (!hit.text) continue;
       primary = hit;
+      primaryReason = row.reason;
       break;
     }
     if (!primary) {
@@ -1363,20 +1385,23 @@ export function foldReasonSummary(input = {}) {
         extra: indexed.length + (ai ? 1 : 0),
         aiLabel: ai,
         tagText: "",
+        tag: "",
         details,
       };
     }
+    const source = primary.community ? "community" : primary.regex ? "regex" : "keyword";
     return {
-      source: primary.community ? "community" : primary.regex ? "regex" : "keyword",
+      source,
       pattern: primary.text,
       extra: Math.max(0, indexed.length - 1) + (ai ? 1 : 0),
       aiLabel: ai,
       tagText: "",
+      tag: source === "community" ? "" : (canonicalTag(primaryReason?.suggestTag) || ""),
       details,
     };
   }
   if (ai) {
-    return { source: "ai", pattern: "", extra: 0, aiLabel: ai, tagText: "", details: [] };
+    return { source: "ai", pattern: "", extra: 0, aiLabel: ai, tagText: "", tag: ai, details: [] };
   }
   return {
     source: "tag",
@@ -1384,6 +1409,7 @@ export function foldReasonSummary(input = {}) {
     extra: Math.max(0, tags.length - 1),
     aiLabel: "",
     tagText: snippet(tags[0].text, 24),
+    tag: canonicalTag(tags[0].name) || "",
     details: tags.map((tag) => ({
       packName: "",
       pattern: snippet(tag.text, 24),
@@ -2489,6 +2515,11 @@ export function sanitizeSettings(prev, patch) {
       if (!Number.isFinite(Number(base.tagThresholds[tag]))) base.tagThresholds[tag] = base.defaultThreshold;
     }
   }
+  if (!base.tagEffects || typeof base.tagEffects !== "object" || Array.isArray(base.tagEffects)) base.tagEffects = {};
+  const effectSource = src.tagEffects && typeof src.tagEffects === "object" && !Array.isArray(src.tagEffects)
+    ? src.tagEffects
+    : base.tagEffects;
+  base.tagEffects = sanitizeTagEffects(effectSource, ["Spam", "Marketing", ...(base.customTags || [])]);
   if (src.shortcuts && typeof src.shortcuts === "object") {
     const next = { ...base.shortcuts };
     for (const slot of ["spam", "marketing", "picker"]) {

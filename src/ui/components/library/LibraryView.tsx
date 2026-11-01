@@ -5,7 +5,7 @@ import type { Hit } from '@/search/engine'
 import { duplicateGroups, extraIds, groupByOriginal, type QuoteGroup } from '@/library/quote-groups'
 import type { MediaItem } from '@/shared/types'
 import { AccountBadges, dragBookmarkIds } from '../AccountBadges'
-import { AuthorMarkButtons, AuthorMarkChips } from '../AuthorMarks'
+import { AuthorMarkButtons, AuthorMarkChips, authorOutlineClass } from '../AuthorMarks'
 import { commitAuthorFlags, type AuthorFlagName } from '../../author-flags'
 import { confirmUnbookmark } from '../../unbookmark'
 import {
@@ -131,6 +131,8 @@ export function LibraryView({
   }, [colsOpen])
 
   const authorMarks = useAuthorMarks()
+  const authorEffects = authorMarks.settings.tagEffects
+  const outlineFor = (post: Post) => authorOutlineClass(post, authorMarks.lookup, authorEffects)
   const { filters: panelFilters, sortOldest } = useMemo(() => filterStateToSearch(filter), [filter])
   const filters = useMemo(
     () => ({ ...panelFilters, authorMarkLookup: authorMarks.lookup }),
@@ -436,7 +438,7 @@ export function LibraryView({
               return (
                 <div
                   key={`${post.tweet_id}:${fromQuote ? 'q' : 'm'}:${index}`}
-                  className={`media-gallery-item ${on ? 'sel' : ''}`}
+                  className={`media-gallery-item ${on ? 'sel' : ''} ${outlineFor(post)}`}
                   draggable
                   onDragStart={(e) => dragBookmarkIds(e, post.tweet_id, selected)}
                 >
@@ -449,7 +451,7 @@ export function LibraryView({
                     {fromQuote && <span className="media-gallery-q">↪</span>}
                   </a>
                   <div className="media-gallery-meta muted">
-                    @{post.screen_name} <AuthorMarkChips post={post} lookup={authorMarks.lookup} />
+                    @{post.screen_name} <AuthorMarkChips post={post} lookup={authorMarks.lookup} effects={authorEffects} />
                     <AuthorMarkButtons post={post} lookup={authorMarks.lookup} onToggle={(item, flag, value) => void onAuthorFlag([item], flag, value)} />
                   </div>
                 </div>
@@ -525,7 +527,7 @@ export function LibraryView({
                 return (
                   <tr
                     key={p.tweet_id}
-                    className={selected.has(p.tweet_id) ? 'sel lib-row' : 'lib-row'}
+                    className={`${selected.has(p.tweet_id) ? 'sel lib-row' : 'lib-row'} ${outlineFor(p)}`}
                     draggable
                     onDragStart={(e) => dragBookmarkIds(e, p.tweet_id, selected)}
                   >
@@ -549,7 +551,7 @@ export function LibraryView({
                           <span className="muted">@{p.screen_name}</span>
                           <span className="lib-acct-badges">
                             <AccountBadges accounts={p.accounts} />
-                            <AuthorMarkChips post={p} lookup={authorMarks.lookup} />
+                            <AuthorMarkChips post={p} lookup={authorMarks.lookup} effects={authorEffects} />
                           </span>
                         </div>
                       </td>
@@ -610,7 +612,7 @@ export function LibraryView({
                   return (
                     <tr
                       key={p.tweet_id}
-                      className={selected.has(p.tweet_id) ? 'sel lib-row' : 'lib-row'}
+                      className={`${selected.has(p.tweet_id) ? 'sel lib-row' : 'lib-row'} ${outlineFor(p)}`}
                       draggable
                       onDragStart={(e) => dragBookmarkIds(e, p.tweet_id, selected)}
                     >
@@ -623,7 +625,7 @@ export function LibraryView({
                           @{p.screen_name} {p.text?.slice(0, 180)}
                         </a>
                         <AccountBadges accounts={p.accounts} />
-                        <AuthorMarkChips post={p} lookup={authorMarks.lookup} />
+                        <AuthorMarkChips post={p} lookup={authorMarks.lookup} effects={authorEffects} />
                         <AuthorMarkButtons post={p} lookup={authorMarks.lookup} onToggle={(post, flag, value) => void onAuthorFlag([post], flag, value)} />
                       </td>
                     </tr>
@@ -674,10 +676,10 @@ export function LibraryView({
                       {!group.original && <span className="muted small"> {t('group_original_missing')}</span>}
                       {open &&
                         group.posts.map((p) => (
-                          <div key={p.tweet_id} className="lib-child-row">
+                          <div key={p.tweet_id} className={`lib-child-row ${outlineFor(p)}`}>
                             <label>
                               <input type="checkbox" checked={selected.has(p.tweet_id)} onChange={(e) => toggleRow(p.tweet_id, e.target.checked)} /> @{p.screen_name}{' '}
-                              <AuthorMarkChips post={p} lookup={authorMarks.lookup} />{' '}
+                              <AuthorMarkChips post={p} lookup={authorMarks.lookup} effects={authorEffects} />{' '}
                               {p.text?.slice(0, 120)}
                             </label>
                           </div>

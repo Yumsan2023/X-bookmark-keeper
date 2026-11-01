@@ -21,6 +21,8 @@ import {
   suggestPackId,
   tagLabel,
   timelineChrome,
+  decorateTagChips,
+  foldAccent,
 } from "../lib/pure.js";
 import { performPlatformAction } from "./act.js";
 import { createOverlay, mountBar, mountInline, openAiSuggest, openChoice, openFalsePositive, openPicker, toast } from "./view.js";
@@ -114,19 +116,22 @@ function chromeFor(meta, record) {
     },
     { lang, followed: meta?.followed },
   );
+  const decorated = decorateTagChips(chrome.chips, snapshot?.settings);
   const protect = chrome.protect ? { ...chrome.protect, title: t(chrome.protect.titleKey) } : null;
-  const chips = chrome.chips.map((chip) => ({
+  const chips = decorated.chips.map((chip) => ({
     ...chip,
     title: chip.more ? t("chipMore", { count: chip.count }) : t("chipOpen"),
   }));
   return {
     signature: {
       protect: protect ? `${protect.reason}:${protect.text}` : "",
-      chips: chips.map((chip) => `${chip.text}:${chip.name}`).join(","),
+      chips: chips.map((chip) => `${chip.text}:${chip.name}:${chip.effect || ""}`).join(","),
+      outline: decorated.outline || "",
       lang,
     },
     protect,
     chips,
+    outline: decorated.outline || "",
   };
 }
 
@@ -237,10 +242,13 @@ function placeholder(article, meta, record, kind, extras = {}) {
       })
     : null;
   const reasonText = formatFoldReason(summary);
+  const foldTone = foldAccent(snapshot?.settings, summary?.tag || "");
   const open = !!extras.open;
-  const signature = `${lang}|${kind}|${meta.handle}|${chrome.protect?.text || ""}|${bits.join(",")}|${open ? 1 : 0}|${reasonText}`;
+  const signature = `${lang}|${kind}|${meta.handle}|${chrome.protect?.text || ""}|${bits.join(",")}|${open ? 1 : 0}|${reasonText}|${foldTone}|${chrome.outline || ""}`;
   if (node.dataset.sig === signature) return;
   node.dataset.sig = signature;
+  if (foldTone) node.dataset.xslFold = foldTone;
+  else delete node.dataset.xslFold;
   node.replaceChildren();
   const toggle = document.createElement("div");
   toggle.className = "xsl-ph-toggle";
@@ -1005,6 +1013,8 @@ function render(article, meta) {
     onAsk: () => askAi(meta),
   });
   syncNameHost(article, chrome);
+  if (chrome.outline) article.dataset.xslOutline = chrome.outline;
+  else delete article.dataset.xslOutline;
   article.dataset.xslHandle = meta.handle.toLowerCase();
   article.dataset.xslUser = meta.userId;
   article.dataset.xslSurface = meta.surface || "";

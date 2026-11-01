@@ -77,6 +77,7 @@ button:focus-visible { outline: 2px solid #e85d04; outline-offset: 1px; }
 .spam { color: #ffd5d8; background: rgba(244,33,46,.18); border: 1px solid rgba(244,33,46,.35); }
 .marketing { color: #d2e9ff; background: rgba(29,155,240,.16); border: 1px solid rgba(29,155,240,.35); }
 .custom { color: #efe7da; background: rgba(243,234,215,.08); border: 1px solid rgba(243,234,215,.2); }
+.plain { color: #e7e9ea; background: transparent; border: 1px solid rgba(255,255,255,.28); }
 .protect {
   color: #d8ffe8; background: rgba(0,186,124,.18); border: 1px solid rgba(0,186,124,.55);
   font-weight: 700; cursor: default;
@@ -161,6 +162,12 @@ export function createOverlay() {
   return shadow;
 }
 
+function chipClass(chip) {
+  if (chip?.more) return "chip tagchip more";
+  const tone = chip?.effect === "none" ? "plain" : (chip?.tone || "custom");
+  return `chip tagchip ${tone}`;
+}
+
 function paintChips(bar, model, handlers) {
   if (model.protect) {
     bar.append(el("span", {
@@ -171,7 +178,7 @@ function paintChips(bar, model, handlers) {
   }
   for (const chip of model.chips || []) {
     bar.append(el("button", {
-      class: `chip tagchip ${chip.tone || "custom"}`,
+      class: chipClass(chip),
       type: "button",
       text: chip.text,
       title: chip.title || "",

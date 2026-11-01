@@ -48,6 +48,7 @@ export function useAuthorMarks() {
       libraryChipFromStrikes: boolean
       libraryChipThreshold: number
       bookmarkMarkAddsStrike: boolean
+      tagEffects: { Spam: string; Marketing: string }
     }
     const lookup = authorMarkLookup(raw?.index ?? {}, raw?.settings) as {
       byUserId: Map<string, unknown>

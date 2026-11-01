@@ -359,6 +359,7 @@ export function SearchView({ lib, settings, compact, preset }: { lib: Library; s
               onDelete={(post) => void onUnbookmark([post.tweet_id])}
               compact={compact}
               authorLookup={authorMarks.lookup}
+              authorEffects={authorMarks.settings.tagEffects}
               onAuthorFlag={(post, flag, value) => void onAuthorFlag([post], flag, value)}
             />
           ))
