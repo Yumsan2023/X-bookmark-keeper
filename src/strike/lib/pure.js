@@ -1,7 +1,8 @@
 /**
  * Pure ledger, rule, and shortcut logic.
  * No chrome.* and no DOM so Node tests and the service worker share one implementation.
- * Strike counts change only through applyMark / import / undo — never through matchRules.
+ * Strike counts change only through applyMark / import / undo — never through
+ * matchRules, addKeywordToPack, or recordRuleHits.
  */
 
 export const SCHEMA = 1;
@@ -10,6 +11,7 @@ export const BUILTIN_TAGS = ["Spam", "Marketing"];
 export const EVIDENCE_CAP = 30;
 export const UNDO_CAP = 50;
 export const LOG_CAP = 80;
+export const HIT_LOG_CAP = 40;
 export const QUEUE_MAX = 100;
 export const QUEUE_ATTEMPTS = 4;
 export const AI_CACHE_CAP = 400;
@@ -258,6 +260,7 @@ export function defaultSettings() {
     dailyCap: 20,
     rateLimitMs: 1200,
     rulesEnabled: true,
+    hitHistory: false,
     ai: {
       enabled: false,
       autoSuggestSuspects: false,
@@ -287,6 +290,7 @@ export function freshState(now = Date.now()) {
     log: [],
     undo: [],
     aiCache: {},
+    hitLog: [],
     rate: { day: localDay(now), count: 0, nextAllowed: 0, paused: false, backoffUntil: 0, lastError: "", rateStrikes: 0 },
     index: {},
     tweetTags: {},
@@ -492,6 +496,255 @@ export function matchRules(packs, ctx) {
   return { suspect: reasons.length > 0, tags, reasons };
 }
 
+const KEYWORD_TARGETS = ["text", "handle", "bio", "any"];
+
+/**
+ * A word taken from a tweet. Stored as a literal keyword, never as a regex.
+ */
+export function normalizeKeyword(raw) {
+  const value = String(raw || "").replace(/\s+/g, " ").trim();
+  if (!value) return { ok: false, error: "empty-keyword" };
+  if (value.length > 80) return { ok: false, error: "keyword-long" };
+  if (!/[\p{L}\p{N}]/u.test(value)) return { ok: false, error: "keyword-plain" };
+  return { ok: true, value };
+}
+
+/**
+ * Append one keyword to an existing pack. Does not read or write the ledger.
+ */
+export function addKeywordToPack(state, input) {
+  const keyword = normalizeKeyword(input?.value);
+  if (!keyword.ok) return keyword;
+  const target = KEYWORD_TARGETS.includes(input?.target) ? input.target : "text";
+  const packId = String(input?.packId || "").slice(0, 40);
+  const pack = (state?.settings?.keywordPacks || []).find((item) => item.id === packId);
+  if (!pack) return { ok: false, error: "no-pack" };
+  if (!Array.isArray(pack.patterns)) pack.patterns = [];
+  const folded = fold(keyword.value);
+  const duplicate = (pack.patterns || []).some((pattern) =>
+    pattern?.type !== "regex" && (pattern?.target || "any") === target && fold(pattern?.value) === folded);
+  if (duplicate) {
+    return { ok: true, duplicate: true, packId: pack.id, packName: pack.name, value: keyword.value };
+  }
+  if ((pack.patterns || []).length >= 80) return { ok: false, error: "pack-full" };
+  pack.patterns.push({ type: "keyword", target, value: keyword.value });
+  return { ok: true, duplicate: false, packId: pack.id, packName: pack.name, value: keyword.value };
+}
+
+function packHeaderName(name) {
+  const cleaned = String(name || "pack").replace(/[[\]]/g, "").trim();
+  return cleaned.slice(0, 40) || "pack";
+}
+
+function patternToLine(pattern) {
+  const target = KEYWORD_TARGETS.includes(pattern?.target) ? pattern.target : "any";
+  const value = String(pattern?.value || "").trim();
+  if (!value) return "";
+  if (pattern?.type === "regex") {
+    let body = value;
+    let flags = "";
+    if (body.startsWith("(?i)")) {
+      body = body.slice(4);
+      flags = "i";
+    }
+    const prefix = target === "any" ? "" : `${target}:`;
+    return `${prefix}/${body}/${flags}`;
+  }
+  if (target === "any") return value;
+  return `${target}: ${value}`;
+}
+
+const PACK_TEXT_HEADER = [
+  "# X Toolkit keyword packs",
+  "# [Pack name] starts a pack. The next lines may be id:, enabled: true|false, suggest: Spam|Marketing|none.",
+  "# A bare line is a keyword for any field. text: / handle: / bio: limit the field.",
+  "# /pattern/i is a regex (optional i flag). Field form: text:/pattern/i",
+  "# A file with no [pack] header becomes one pack named Imported.",
+  "# Apply replaces the packs in the form. Save to keep them.",
+  "# A match only paints the Suspect chip. It never adds a strike.",
+].join("\n");
+
+export function packsToText(packs) {
+  const blocks = [];
+  for (const pack of packs || []) {
+    const lines = [`[${packHeaderName(pack?.name)}]`];
+    const id = String(pack?.id || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40);
+    if (id) lines.push(`id: ${id}`);
+    lines.push(`enabled: ${pack?.enabled === false ? "false" : "true"}`);
+    const suggest = pack?.suggestTag === "Marketing" || pack?.suggestTag === "Spam" ? pack.suggestTag : "none";
+    lines.push(`suggest: ${suggest}`);
+    for (const pattern of pack?.patterns || []) {
+      const line = patternToLine(pattern);
+      if (line) lines.push(line);
+    }
+    blocks.push(lines.join("\n"));
+  }
+  return `${PACK_TEXT_HEADER}\n\n${blocks.join("\n\n")}\n`;
+}
+
+function parsePatternLine(line) {
+  const trimmed = String(line || "").trim();
+  if (!trimmed || trimmed.startsWith("#")) return null;
+  const regexLine = trimmed.match(/^(?:(text|handle|bio|any):)?\/(.*)\/([i]?)$/);
+  if (regexLine) {
+    const body = regexLine[2];
+    if (!body) return { error: "empty-regex" };
+    const flags = regexLine[3] || "";
+    return { type: "regex", target: regexLine[1] || "any", value: flags === "i" ? `(?i)${body}` : body };
+  }
+  const fieldLine = trimmed.match(/^(text|handle|bio|any):\s*(.+)$/);
+  if (fieldLine) return { type: "keyword", target: fieldLine[1], value: fieldLine[2].trim() };
+  return { type: "keyword", target: "any", value: trimmed };
+}
+
+/**
+ * Text form of keyword packs. Round-trips packsToText(). A headerless word
+ * list becomes a single enabled Spam pack named Imported.
+ */
+export function parseKeywordPackText(text) {
+  const rawText = String(text || "").replace(/^\uFEFF/, "");
+  if (rawText.length > 100_000) return { ok: false, error: "too-large", packs: [], warnings: [] };
+  const warnings = [];
+  const lines = rawText.split(/\r?\n/);
+  const headers = [];
+  lines.forEach((line, index) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) return;
+    const header = trimmed.match(/^\[([^[\]]+)\]$/);
+    if (header && header[1].trim()) headers.push({ index, name: header[1].trim() });
+  });
+  const rawPacks = [];
+  const pushPatterns = (sourceLines, packName, meta) => {
+    const patterns = [];
+    let directives = !!meta;
+    let id = meta?.id || "";
+    let enabled = meta ? meta.enabled : true;
+    let suggestTag = meta ? meta.suggestTag : "Spam";
+    for (const line of sourceLines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      if (directives) {
+        const idMatch = trimmed.match(/^id:\s*([A-Za-z0-9_-]{1,40})$/);
+        const enabledMatch = trimmed.match(/^enabled:\s*(true|false)$/);
+        const suggestMatch = trimmed.match(/^suggest:\s*(Spam|Marketing|none)$/);
+        if (idMatch) {
+          id = idMatch[1];
+          continue;
+        }
+        if (enabledMatch) {
+          enabled = enabledMatch[1] === "true";
+          continue;
+        }
+        if (suggestMatch) {
+          suggestTag = suggestMatch[1] === "none" ? "" : suggestMatch[1];
+          continue;
+        }
+        directives = false;
+      }
+      const pattern = parsePatternLine(trimmed);
+      if (!pattern) continue;
+      if (pattern.error) {
+        warnings.push(`已忽略空正则（${packName}）`);
+        continue;
+      }
+      patterns.push(pattern);
+    }
+    return { id, enabled, suggestTag, patterns };
+  };
+  if (!headers.length) {
+    const parsed = pushPatterns(lines, "Imported", null);
+    if (parsed.patterns.length) {
+      rawPacks.push({ id: "pack-imported", name: "Imported", enabled: true, suggestTag: "Spam", patterns: parsed.patterns });
+    }
+  } else {
+    headers.forEach((header, index) => {
+      const end = index + 1 < headers.length ? headers[index + 1].index : lines.length;
+      const parsed = pushPatterns(lines.slice(header.index + 1, end), header.name, { id: "", enabled: true, suggestTag: "" });
+      rawPacks.push({
+        id: parsed.id || undefined,
+        name: header.name,
+        enabled: parsed.enabled,
+        suggestTag: parsed.suggestTag,
+        patterns: parsed.patterns,
+      });
+    });
+  }
+  const packs = sanitizePacks(rawPacks, warnings);
+  const used = new Set();
+  for (const pack of packs) {
+    let id = pack.id;
+    while (used.has(id)) id = `${id.slice(0, 34)}-${used.size}`.slice(0, 40);
+    used.add(id);
+    pack.id = id;
+  }
+  return { ok: true, packs, warnings };
+}
+
+/**
+ * Debug log for rule hits. Never increments a strike count.
+ */
+export function recordRuleHits(state, input, now) {
+  if (!state?.settings?.hitHistory) return { ok: true, recorded: 0, skipped: "off" };
+  const incoming = Array.isArray(input?.hits) ? input.hits.slice(0, 8) : [];
+  const next = Array.isArray(state.hitLog) ? [...state.hitLog] : [];
+  const seen = new Set(next.map((item) => `${item.tweetId}|${item.packId}|${item.pattern}`));
+  let recorded = 0;
+  for (const raw of incoming) {
+    const pattern = snippet(raw?.pattern, 80);
+    const packId = String(raw?.packId || "").slice(0, 40);
+    const tweetId = String(raw?.tweetId || "").replace(/[^\w-]/g, "").slice(0, 40);
+    if (!pattern || !packId || !tweetId) continue;
+    const key = `${tweetId}|${packId}|${pattern}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    next.unshift({
+      at: now,
+      packId,
+      packName: snippet(raw?.packName, 40),
+      pattern,
+      target: KEYWORD_TARGETS.includes(raw?.target) ? raw.target : "text",
+      handle: sanitizeHandle(raw?.handle),
+      tweetId,
+      snippet: snippet(raw?.snippet, 80),
+    });
+    recorded += 1;
+  }
+  state.hitLog = next.slice(0, HIT_LOG_CAP);
+  return { ok: true, recorded };
+}
+
+export function clearHitLog(state) {
+  state.hitLog = [];
+  return { ok: true };
+}
+
+function menuTitle(text) {
+  return snippet(text, 80).replace(/%/g, "％");
+}
+
+export function keywordMenuPlan(packs, lang) {
+  const zh = lang === "zh";
+  const items = [];
+  for (const pack of packs || []) {
+    if (!pack?.id) continue;
+    const name = snippet(pack.name || pack.id, 40).replace(/%/g, "％");
+    const off = pack.enabled === false;
+    const title = zh
+      ? (off ? `加入「${name}」（已停用）` : `加入「${name}」`)
+      : (off ? `Add to “${name}” (off)` : `Add to “${name}”`);
+    items.push({
+      id: `xsl-kw:${String(pack.id).slice(0, 40)}`,
+      title: menuTitle(title),
+      packId: String(pack.id).slice(0, 40),
+    });
+    if (items.length >= 30) break;
+  }
+  return {
+    parentTitle: zh ? "把选中文字加入关键词包" : "Add selection to keyword pack",
+    items,
+  };
+}
+
 export function interpretAiLabel(content) {
   if (!content) return { label: null, reason: "", verdict: "invalid" };
   let text = String(content).trim().replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
@@ -583,7 +836,7 @@ export function sanitizeSettings(prev, patch) {
   if (src.language === "auto" || src.language === "zh" || src.language === "en") base.language = src.language;
   if (src.defaultThreshold != null) base.defaultThreshold = clampInt(src.defaultThreshold, 1, 99, base.defaultThreshold);
   if (src.actionMode === "auto" || src.actionMode === "confirm" || src.actionMode === "prompt-only") base.actionMode = src.actionMode;
-  for (const key of ["hideOnThreshold", "muteOnThreshold", "blockOnThreshold", "enablePlatformActions", "rulesEnabled"]) {
+  for (const key of ["hideOnThreshold", "muteOnThreshold", "blockOnThreshold", "enablePlatformActions", "rulesEnabled", "hitHistory"]) {
     if (typeof src[key] === "boolean") base[key] = src[key];
   }
   if (src.dailyCap != null) base.dailyCap = clampInt(src.dailyCap, 1, 500, base.dailyCap);
@@ -1628,6 +1881,25 @@ export function normalizeState(raw, now = Date.now()) {
   state.log = Array.isArray(raw.log) ? raw.log.slice(0, LOG_CAP) : [];
   state.undo = Array.isArray(raw.undo) ? raw.undo.slice(0, UNDO_CAP) : [];
   state.aiCache = raw.aiCache && typeof raw.aiCache === "object" ? raw.aiCache : {};
+  state.hitLog = [];
+  if (Array.isArray(raw.hitLog)) {
+    for (const item of raw.hitLog.slice(0, HIT_LOG_CAP)) {
+      const pattern = snippet(item?.pattern, 80);
+      const packId = String(item?.packId || "").slice(0, 40);
+      const tweetId = String(item?.tweetId || "").replace(/[^\w-]/g, "").slice(0, 40);
+      if (!pattern || !packId || !tweetId) continue;
+      state.hitLog.push({
+        at: timeOf(item.at, now),
+        packId,
+        packName: snippet(item.packName, 40),
+        pattern,
+        target: ["text", "handle", "bio", "any"].includes(item.target) ? item.target : "text",
+        handle: sanitizeHandle(item.handle),
+        tweetId,
+        snippet: snippet(item.snippet, 80),
+      });
+    }
+  }
   state.rate = {
     day: typeof raw.rate?.day === "string" ? raw.rate.day : localDay(now),
     count: clampInt(raw.rate?.count, 0, 10000, 0),

@@ -1,6 +1,6 @@
 import { send } from "../lib/client.js";
 import { loadDict, translate } from "../lib/i18n.js";
-import { resolveLang, shortcutFromEvent, tagLabel } from "../lib/pure.js";
+import { packsToText, parseKeywordPackText, resolveLang, shortcutFromEvent, tagLabel } from "../lib/pure.js";
 
 /** Mount the strike options UI inside a shadow root (or any parent). */
 export async function mountStrikeOptions(root) {
@@ -11,6 +11,7 @@ export async function mountStrikeOptions(root) {
   let queue = [];
   let dashboard = null;
   let log = [];
+  let hitLog = [];
   let undo = null;
   let stats = null;
   let keyDirty = false;
@@ -68,7 +69,7 @@ export async function mountStrikeOptions(root) {
     $("#language").value = draft.language;
     $("#defaultThreshold").value = draft.defaultThreshold;
     root.querySelector(`input[name="actionMode"][value="${draft.actionMode}"]`).checked = true;
-    for (const id of ["hideOnThreshold", "muteOnThreshold", "blockOnThreshold", "enablePlatformActions", "rulesEnabled"]) {
+    for (const id of ["hideOnThreshold", "muteOnThreshold", "blockOnThreshold", "enablePlatformActions", "rulesEnabled", "hitHistory"]) {
       $(`#${id}`).checked = !!draft[id];
     }
     $("#dailyCap").value = draft.dailyCap;
@@ -82,8 +83,10 @@ export async function mountStrikeOptions(root) {
     $("#model").value = draft.ai.model;
     $("#apiKey").value = draft.ai.apiKey || "";
     keyDirty = false;
+    $("#pack-text").value = packsToText(draft.keywordPacks);
     renderThresholds();
     renderPacks();
+    renderHitLog();
   }
 
   function renderThresholds() {
@@ -379,6 +382,26 @@ export async function mountStrikeOptions(root) {
     }
   }
 
+  function renderHitLog() {
+    const root = $("#hit-log");
+    root.replaceChildren();
+    if (!hitLog.length) {
+      const empty = document.createElement("p");
+      empty.className = "quiet";
+      empty.textContent = t("emptyHits");
+      root.append(empty);
+      return;
+    }
+    for (const item of hitLog) {
+      const row = document.createElement("div");
+      row.className = "log-item";
+      const when = new Date(item.at).toLocaleString();
+      const who = item.handle ? `@${item.handle}` : "";
+      row.textContent = `${when} · ${item.packName || item.packId} · ${item.pattern} · ${who} ${item.snippet || ""}`.trim();
+      root.append(row);
+    }
+  }
+
   function renderLog() {
     const root = $("#log");
     root.replaceChildren();
@@ -402,7 +425,7 @@ export async function mountStrikeOptions(root) {
     draft.language = $("#language").value;
     draft.defaultThreshold = Number($("#defaultThreshold").value);
     draft.actionMode = root.querySelector('input[name="actionMode"]:checked')?.value || "confirm";
-    for (const id of ["hideOnThreshold", "muteOnThreshold", "blockOnThreshold", "enablePlatformActions", "rulesEnabled"]) {
+    for (const id of ["hideOnThreshold", "muteOnThreshold", "blockOnThreshold", "enablePlatformActions", "rulesEnabled", "hitHistory"]) {
       draft[id] = $(`#${id}`).checked;
     }
     draft.dailyCap = Number($("#dailyCap").value);
@@ -464,6 +487,7 @@ export async function mountStrikeOptions(root) {
       backoffUntil: result.stats?.backoffUntil || 0,
     };
     log = result.log || [];
+    hitLog = result.hitLog || [];
     undo = result.undo;
     stats = result.stats;
     lang = resolveLang(draft.language, navigator.language);
@@ -487,6 +511,7 @@ export async function mountStrikeOptions(root) {
     renderQueueDash();
     renderQueue();
     renderLog();
+    renderHitLog();
   });
 
   $("#query").addEventListener("input", () => renderLedger());
@@ -527,9 +552,54 @@ export async function mountStrikeOptions(root) {
     const result = await send({ type: "RESTORE_PACKS" });
     if (result.ok) {
       draft.keywordPacks = result.keywordPacks;
+      $("#pack-text").value = packsToText(draft.keywordPacks);
       renderPacks();
       note(t("saved"), "ok");
     }
+  });
+  function applyPackText(text) {
+    const parsed = parseKeywordPackText(text);
+    if (!parsed.ok) {
+      note(t(parsed.error || "error"), "bad");
+      return;
+    }
+    if (!parsed.packs.length) {
+      note(t("packTextEmpty"), "bad");
+      return;
+    }
+    draft.keywordPacks = parsed.packs;
+    $("#pack-text").value = packsToText(draft.keywordPacks);
+    renderPacks();
+    const warnings = parsed.warnings || [];
+    const applied = t("packTextApplied", { count: parsed.packs.length });
+    note(warnings.length ? `${applied} ${warnings.join(" ")}` : applied, warnings.length ? "bad" : "ok");
+  }
+  $("#pack-text-apply").addEventListener("click", () => applyPackText($("#pack-text").value));
+  $("#pack-text-refresh").addEventListener("click", () => {
+    $("#pack-text").value = packsToText(draft.keywordPacks);
+  });
+  $("#pack-text-export").addEventListener("click", () => {
+    const raw = $("#pack-text").value;
+    const blob = new Blob([raw.trim() ? raw : packsToText(draft.keywordPacks)], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `x-toolkit-keywords-${new Date().toISOString().slice(0, 10)}.txt`;
+    link.click();
+    URL.revokeObjectURL(url);
+    note(t("exportDone"), "ok");
+  });
+  $("#pack-text-file").addEventListener("change", async () => {
+    const file = $("#pack-text-file").files?.[0];
+    $("#pack-text-file").value = "";
+    if (!file) return;
+    if (file.size > 100_000) return note(t("too-large"), "bad");
+    applyPackText(await file.text());
+  });
+  $("#clear-hits").addEventListener("click", async () => {
+    const result = await send({ type: "CLEAR_HIT_LOG" });
+    note(result.ok ? t("saved") : t(result.error || "error"), result.ok ? "ok" : "bad");
+    if (result.ok) await reload();
   });
   for (const node of root.querySelectorAll("[data-slot]")) {
     node.addEventListener("keydown", (event) => {

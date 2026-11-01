@@ -1,4 +1,5 @@
 import { dispatch as dispatchStrike } from '@/strike/lib/store.js'
+import { installKeywordMenus } from './keyword-menu'
 import { registerAuthCapture } from './auth-capture'
 import { installDnrRules } from './dnr'
 import { handleMessage, recoverInterrupted, startSync } from './messaging'
@@ -11,6 +12,7 @@ function isStrikeMessage(msg: unknown): msg is { type: string } {
 
 // MV3: 所有事件监听必须在 service worker 顶层同步注册
 registerAuthCapture()
+installKeywordMenus()
 
 chrome.runtime.onMessage.addListener((msg: BgRequest, sender, sendResponse) => {
   if (isStrikeMessage(msg)) {

@@ -18,6 +18,7 @@ function el(tag, attrs = {}, kids = []) {
     if (key === "class") node.className = value;
     else if (key === "text") node.textContent = value;
     else if (key === "checked") node.checked = !!value;
+    else if (key === "selected") node.selected = !!value;
     else if (key === "disabled") node.disabled = !!value;
     else if (key === "value") node.value = value;
     else if (key.startsWith("on") && typeof value === "function") node.addEventListener(key.slice(2).toLowerCase(), value);
@@ -88,10 +89,12 @@ button, .tag {
 .tag.on { background: rgba(232,93,4,.18); border-color: #e85d04; }
 .tag small { color: #8b98a5; margin-left: 4px; }
 form { display: flex; gap: 8px; margin-top: 8px; }
-input[type="text"] {
+input[type="text"], select {
   flex: 1; border-radius: 999px; border: 1px solid rgba(255,255,255,.16);
   background: #0f1419; color: #e7e9ea; padding: 7px 12px; font: inherit;
 }
+.kw { display: grid; gap: 8px; margin: 4px 0 8px; }
+.kw .row { margin-top: 0; }
 .check { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 13px; }
 @media (min-width: 720px) {
   .backdrop { align-items: center; }
@@ -221,6 +224,33 @@ export function openPicker(shadow, model) {
       if (name) finish({ type: "add", name });
     });
     sheet.append(form);
+    if (model.keyword) {
+      const kw = model.keyword;
+      const word = el("input", {
+        type: "text",
+        maxlength: "80",
+        value: kw.word || "",
+        placeholder: kw.placeholder,
+        "aria-label": kw.placeholder,
+      });
+      const select = el("select", { "aria-label": kw.packLabel });
+      for (const pack of kw.packs || []) {
+        select.append(el("option", { value: pack.id, text: pack.name, selected: pack.id === kw.packId }));
+      }
+      sheet.append(el("div", { class: "kw" }, [
+        el("p", { text: kw.note }),
+        word,
+        el("div", { class: "row" }, [
+          select,
+          el("button", {
+            type: "button",
+            text: kw.add,
+            disabled: !(kw.packs || []).length,
+            onClick: () => finish({ type: "keyword", value: word.value, packId: select.value }),
+          }),
+        ]),
+      ]));
+    }
     sheet.append(el("label", { class: "check" }, [
       el("input", {
         type: "checkbox",
