@@ -18,6 +18,7 @@ const expanded = new Set();
 const aiAsked = new Set();
 const aiResults = new Map();
 const seenSent = new Set();
+const reportedHits = new Set();
 let dict = {};
 let snapshot = null;
 let lang = "en";
@@ -65,7 +66,9 @@ function describe(article) {
 }
 
 function applySnapshot(next) {
+  const prevHits = snapshot?.hitLog?.length || 0;
   snapshot = next || null;
+  if ((snapshot?.hitLog?.length || 0) < prevHits) reportedHits.clear();
   lang = resolveLang(snapshot?.settings?.language, navigator.language);
   scan();
 }
@@ -154,6 +157,40 @@ function suspectFor(meta) {
   const matched = matchRules(settings.keywordPacks, { text: meta.text, handle: meta.handle, bio: meta.bio });
   if (!matched.suspect) return null;
   return matched;
+}
+
+function selectedIn(article) {
+  const sel = window.getSelection?.();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return "";
+  const node = sel.anchorNode;
+  const el = node?.nodeType === 1 ? node : node?.parentElement;
+  if (!el || !article.contains(el)) return "";
+  return sel.toString();
+}
+
+function maybeRecordHits(meta, matched) {
+  if (!snapshot?.settings?.hitHistory || !matched?.reasons?.length) return;
+  const known = new Set((snapshot.hitLog || []).map((item) => `${item.tweetId}|${item.packId}|${item.pattern}`));
+  const fresh = [];
+  for (const reason of matched.reasons) {
+    const key = `${meta.tweetId}|${reason.packId}|${reason.pattern}`;
+    if (known.has(key) || reportedHits.has(key)) continue;
+    reportedHits.add(key);
+    fresh.push({
+      packId: reason.packId,
+      packName: reason.packName,
+      pattern: reason.pattern,
+      target: reason.target,
+      handle: meta.handle,
+      tweetId: meta.tweetId,
+      snippet: meta.text,
+    });
+  }
+  if (!fresh.length) return;
+  void send({ type: "RECORD_HITS", hits: fresh }).then((result) => {
+    if (result?.ok) return;
+    for (const reason of fresh) reportedHits.delete(`${meta.tweetId}|${reason.packId}|${reason.pattern}`);
+  });
 }
 
 function rememberFollow(meta) {
@@ -328,8 +365,31 @@ async function openTags(article) {
     queueMute: settings.enablePlatformActions ? t("queueMute") : "",
     queueBlock: settings.enablePlatformActions ? t("queueBlock") : "",
     cancel: t("cancel"),
+    keyword: {
+      word: selectedIn(article),
+      packs: (settings.keywordPacks || []).map((pack) => ({ id: pack.id, name: pack.name })),
+      packId: (settings.keywordPacks || []).find((pack) => pack.enabled !== false)?.id
+        || settings.keywordPacks?.[0]?.id
+        || "",
+      note: t("addKeywordNote"),
+      placeholder: t("addKeywordPh"),
+      add: t("addKeywordBtn"),
+      packLabel: t("addKeywordPack"),
+    },
   }));
   if (!action) return;
+  if (action.type === "keyword") {
+    const saved = await send({
+      type: "ADD_KEYWORD",
+      packId: action.packId,
+      value: action.value,
+      target: "text",
+    });
+    if (!saved?.ok) toast(overlay, t(saved?.error || "error"));
+    else if (saved.duplicate) toast(overlay, t("keywordDuplicate", { word: saved.value, pack: saved.packName }));
+    else toast(overlay, t("keywordAdded", { word: saved.value, pack: saved.packName }));
+    return;
+  }
   if (action.type === "queue") {
     const queued = await send({
       type: "APPLY_ACTIONS",
@@ -447,6 +507,7 @@ function render(article, meta) {
     title: `@${meta.handle}`,
   }));
   const matched = suspectFor(meta);
+  if (matched) maybeRecordHits(meta, matched);
   const ai = aiResults.get(meta.tweetId);
   const settings = snapshot?.settings;
   const shortcuts = settings?.shortcuts || {};
@@ -633,9 +694,20 @@ async function pump() {
   }
 }
 
+function onKeywordResult(message) {
+  if (!message?.ok) toast(overlay, t(message?.error || "error"));
+  else if (message.duplicate) toast(overlay, t("keywordDuplicate", { word: message.value, pack: message.packName }));
+  else toast(overlay, t("keywordAdded", { word: message.value, pack: message.packName }));
+}
+
 export async function start() {
   dict = await loadDict();
   overlay = createOverlay();
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type !== "KEYWORD_RESULT") return;
+    onKeywordResult(message);
+    sendResponse({ ok: true });
+  });
   await loadSnapshot();
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "local" && changes.xsl) applySnapshot(changes.xsl.newValue);

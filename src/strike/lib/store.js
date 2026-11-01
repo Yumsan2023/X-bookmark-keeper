@@ -5,6 +5,7 @@
 
 import {
   allowedAiEndpoint,
+  addKeywordToPack,
   applyActions,
   applyMark,
   applyUndo,
@@ -12,6 +13,7 @@ import {
   addCustomTag,
   beginAction,
   cancelAction,
+  clearHitLog,
   clearQueue,
   clearTag,
   contentHash,
@@ -29,6 +31,7 @@ import {
   pruneAiCache,
   publicAccount,
   queueDashboard,
+  recordRuleHits,
   removeCustomTag,
   restorePacks,
   retryAction,
@@ -88,6 +91,17 @@ function isExtensionPage(sender) {
 
 function editorOnly(sender) {
   if (isExtensionPage(sender)) return null;
+  return { ok: false, error: "forbidden" };
+}
+
+function timelineOrEditor(sender) {
+  if (isExtensionPage(sender)) return null;
+  try {
+    const host = new URL(sender?.url || "").hostname;
+    if (host === "x.com" || host === "twitter.com" || host === "mobile.x.com" || host === "mobile.twitter.com") return null;
+  } catch {
+    /* not a timeline page */
+  }
   return { ok: false, error: "forbidden" };
 }
 
@@ -204,6 +218,7 @@ export function dispatch(message, sender = {}) {
           queue: state.queue,
           dashboard: queueDashboard(state, now),
           log: state.log.slice(0, 30),
+          hitLog: state.hitLog.slice(0, 40),
           undo: describeUndo(state.undo[0]),
         };
         break;
@@ -260,6 +275,26 @@ export function dispatch(message, sender = {}) {
         if (denied) return denied;
         restorePacks(state);
         result = { ok: true, keywordPacks: state.settings.keywordPacks };
+        break;
+      }
+      case "ADD_KEYWORD": {
+        const denied = timelineOrEditor(sender);
+        if (denied) return denied;
+        result = addKeywordToPack(state, message);
+        if (result?.duplicate) return result;
+        break;
+      }
+      case "RECORD_HITS": {
+        const denied = timelineOrEditor(sender);
+        if (denied) return denied;
+        result = recordRuleHits(state, message, now);
+        if (!result?.recorded) return result;
+        break;
+      }
+      case "CLEAR_HIT_LOG": {
+        const denied = editorOnly(sender);
+        if (denied) return denied;
+        result = clearHitLog(state);
         break;
       }
       case "PEEK_ACTION": {

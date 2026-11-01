@@ -102,11 +102,28 @@
       <section id="rules">
         <h2 data-i18n="packs"></h2>
         <p class="hint" data-i18n="examples"></p>
+        <p class="hint" data-i18n="addFromTweet"></p>
         <div id="packs"></div>
         <div class="row">
           <button id="add-pack" type="button" data-i18n="addPack"></button>
           <button id="restore-packs" type="button" data-i18n="restorePacks"></button>
         </div>
+        <label>
+          <span data-i18n="packText"></span>
+          <textarea id="pack-text" spellcheck="false"></textarea>
+        </label>
+        <p class="hint" data-i18n="packTextHelp"></p>
+        <div class="row">
+          <button id="pack-text-apply" type="button" data-i18n="applyPackText"></button>
+          <button id="pack-text-refresh" type="button" data-i18n="refreshPackText"></button>
+          <button id="pack-text-export" type="button" data-i18n="exportPackText"></button>
+          <label class="file"><span data-i18n="importPackText"></span><input id="pack-text-file" type="file" accept="text/plain,.txt" hidden /></label>
+        </div>
+        <label class="inline"><input id="hitHistory" type="checkbox" /> <span data-i18n="hitHistory"></span></label>
+        <p class="hint" data-i18n="hitHistoryHelp"></p>
+        <h2 data-i18n="hits"></h2>
+        <div id="hit-log"></div>
+        <button id="clear-hits" type="button" data-i18n="clearHits"></button>
       </section>
 
       <section id="shortcuts">

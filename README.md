@@ -1,6 +1,6 @@
 # X Toolkit — X (Twitter) 书签管家 + 打击账本 (Chrome MV3 扩展)
 
-**当前版本: 0.7.1** — 一个扩展同时包含书签库与打击账本 / Strike Ledger。本产品此前名为 Bookmark Keeper；本地书签库 IndexedDB 名仍是 `bookmark-keeper`，旧库可直接升级。0.7.1 给打击账本加上静音/屏蔽队列和限流面板。
+**当前版本: 0.7.2** — 一个扩展同时包含书签库与打击账本 / Strike Ledger。本产品此前名为 Bookmark Keeper；本地书签库 IndexedDB 名仍是 `bookmark-keeper`，旧库可直接升级。0.7.1 给打击账本加上静音/屏蔽队列和限流面板。0.7.2 可以编辑关键词包（含文本导入导出），并从帖子把选中的词加进词库；命中只出黄标，不自动记一笔。
 
 在 x.com 时间线上标记垃圾/营销的账本与书签同步共用一个工具栏图标。请卸载单独安装的 X Strike Ledger，否则两个内容脚本会同时注入。
 
@@ -11,7 +11,7 @@
 <details>
 <summary><strong>English summary</strong></summary>
 
-Chrome MV3 extension **X Toolkit**. It syncs X **bookmarks** and optional public **UserTweets** into local IndexedDB, and adds a local **Strike Ledger**: mark Spam / Marketing on the x.com timeline, then hide locally or (only if you turn it on) mute/block through X’s own menu. v0.7.1 keeps that one extension (storage keys `bk_*` and `xsl` / `xslSecret`) and queues mute/block instead of clicking them in a burst: jitter of about 1s+, a daily cap, backoff when a rate-limit notice is visible, and pause/resume on the Strike tab. Unload a standalone Strike Ledger install so the page is not injected twice. Mute and block stay off until you enable them. **Not verified against real X accounts** in this repo; unit tests + Mock-X e2e only. May violate X ToS; use at your own risk. MIT License.
+Chrome MV3 extension **X Toolkit**. It syncs X **bookmarks** and optional public **UserTweets** into local IndexedDB, and adds a local **Strike Ledger**: mark Spam / Marketing on the x.com timeline, then hide locally or (only if you turn it on) mute/block through X’s own menu. v0.7.1 queues mute/block (jitter of about 1s+, a daily cap, backoff, pause/resume). v0.7.2 adds editable keyword packs (including plain-text import/export) and **Add selection to keyword pack** from a tweet’s Mark menu or the right-click menu. A keyword hit still only shows the yellow Suspect chip and never adds a strike. Storage keys stay `bk_*` and `xsl` / `xslSecret`. Unload a standalone Strike Ledger install so the page is not injected twice. Mute and block stay off until you enable them. **Not verified against real X accounts** in this repo; unit tests + Mock-X e2e only. May violate X ToS; use at your own risk. MIT License.
 
 Step-by-step: [docs/USAGE.md](./docs/USAGE.md) · Develop: [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md) · Contribute: [CONTRIBUTING.md](./CONTRIBUTING.md)
 
@@ -71,6 +71,7 @@ Step-by-step: [docs/USAGE.md](./docs/USAGE.md) · Develop: [docs/DEVELOPMENT.md]
 | 库视图（v0.6）：侧栏、媒体画廊、按引用原文归组、重复项（不自动删除） | ✅ 归组单测；界面随构建 |
 | 打击账本 / Strike Ledger：时间线标记、本地折叠、阈值、关键词黄标、可选 BYOK；静音/屏蔽走 X 菜单且默认关闭 | ✅ 账本纯逻辑单测；**菜单点击未对真实 X 验证** |
 | 静音/屏蔽队列（0.7.1）：抖动、每日上限、可识别的限流退避、暂停/继续、失败重试；打击账本页的队列面板 | ✅ 队列纯逻辑单测；**菜单点击未对真实 X 验证** |
+| 关键词包（0.7.2）：启用/停用、编辑、文本导入导出；从帖子「标记」或右键把选中词加入词库；可选命中记录。命中只出黄标 | ✅ 词库纯逻辑单测；**右键菜单未对真实 X 验证** |
 
 ---
 
@@ -131,6 +132,28 @@ npm test               # 建议先跑通单元测试
 4. 回到 **队列与限流** 看长度、失败和今日用量。可暂停后再继续。失败项可以单条或整批重试。
 
 书签同步里的 “timeline” 是 UserTweets 抓取；打击账本里的时间线是页面上的标记/折叠。两套消息类型分开（书签是 `timeline/start` 这类，账本是 `MARK` / `SET_HIDDEN` 这类）。
+
+### 从一条帖子把词加入关键词包（0.7.2）
+
+关键词命中**只**在帖子上显示黄色 **Suspect / 可疑**。它不会给账号加打击次数。要记账，仍需你在「标记」里自己确认。
+
+**用「标记」菜单（推荐）：**
+
+1. 重新构建并加载 `dist/`（版本 0.7.2）。
+2. 打开 x.com 时间线，在某条帖子正文里用鼠标选中一个词或短语。
+3. 点这条帖子上的 **标记**。
+4. 面板下方会带上选中的文字。选一个关键词包，点 **加入此包**。没选中文字时，也可以在同一个输入框里自己打一个词。
+5. 这个词按「正文」保存（不会当成正则）。之后别的帖子正文再出现它，才会出黄标。重复添加会提示已经在包里。
+
+**用右键（Chrome MV3 的 contextMenus，仅在 x.com / twitter.com 的选中文字上出现）：**
+
+1. 选中帖子里的文字，右键。这依赖 manifest 里的 `contextMenus` 权限；重新加载扩展后即可使用。
+2. 选 **把选中文字加入关键词包**（英文界面是 **Add selection to keyword pack**）。
+3. 再选要放进的词库。停用的包会标成「已停用」，仍可以加入，但停用期间不会出黄标。
+
+选项页 **打击账本 → 关键词包** 可以启用/停用每个包、改名称和建议标签、逐条改规则。下面的 **词库文本** 用纯文本编辑整套词库：`[包名]` 开头，接着可选 `id:` / `enabled:` / `suggest:`，然后每行一条。没有 `[包名]` 的纯词表会导入成一个名为 `Imported` 的包。点 **应用文本** 只更新表单，再点 **保存** 才写入。**导出文本** / **导入文本** 走 `.txt`。
+
+**命中记录**默认关闭。打开「记录关键词命中（调试）」后，黄标会在本机留下最多 40 条短记录（词、包、账号、摘要），便于看规则为什么响。可以清空。这条记录**不会**增加打击次数。
 
 ---
 
