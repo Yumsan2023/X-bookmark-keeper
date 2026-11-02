@@ -9,8 +9,22 @@ import { mergeSettings } from '@/shared/storage'
 
 export const FULL_BACKUP_FORMAT = 'x-toolkit-full' as const
 export const FULL_BACKUP_VERSION = 1 as const
-export const APP_VERSION = '0.7.15'
-export const FULL_BACKUP_MAX_CHARS = 64_000_000
+export const APP_VERSION = '0.7.16'
+/**
+ * Shared ceiling for Settings → 从备份恢复.
+ * `File.size` is bytes; `inspectBackupText` uses JavaScript string length.
+ * 512 MiB covers a ~115 MB legacy bookmark-keeper JSON with headroom.
+ * The options page reads and parses the file once; the cap stays so a
+ * multi-gigabyte file is rejected before that work starts.
+ * Post, folder, and ledger count caps are unchanged.
+ */
+export const FULL_BACKUP_MAX_BYTES = 512 * 1024 * 1024
+export const FULL_BACKUP_MAX_CHARS = FULL_BACKUP_MAX_BYTES
+
+/** True when a file byte length or backup text length is over the restore ceiling. */
+export function backupExceedsSizeLimit(size: number): boolean {
+  return size > FULL_BACKUP_MAX_BYTES
+}
 
 const MAX_POSTS = 200_000
 const MAX_FOLDERS = 5_000
@@ -423,7 +437,7 @@ export function inspectBackup(raw: unknown): InspectResult {
 }
 
 export function inspectBackupText(text: string): InspectResult {
-  if (text.length > FULL_BACKUP_MAX_CHARS) return { ok: false, error: 'too-large' }
+  if (backupExceedsSizeLimit(text.length)) return { ok: false, error: 'too-large' }
   let raw: unknown
   try {
     raw = JSON.parse(text)
