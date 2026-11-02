@@ -10,6 +10,7 @@ import { commitAuthorFlags, type AuthorFlagName } from '../author-flags'
 import { bg, useAuthorMarks, type Library } from '../hooks'
 import { useT, type Key } from '../i18n'
 import { downloadMedia, exportPosts, exportPostsBatched, openPrint, type ExportKind } from '../util'
+import { AccountSwitch } from './AccountSwitch'
 import { TagCheckboxList } from './library/FilterPanel'
 import { AiDialog } from './AiDialog'
 import { useDialogs } from './Dialogs'
@@ -38,6 +39,7 @@ export function SearchView({ lib, settings, compact, preset }: { lib: Library; s
   const [checkedTags, setCheckedTags] = useState<string[]>([])
   const [status, setStatus] = useState<Filters['status']>('all')
   const [source, setSource] = useState<Filters['source']>('all')
+  const [account, setAccount] = useState('')
   const [sort, setSort] = useState<SortKey>('relevance')
   const [page, setPage] = useState(0)
   const [showFilters, setShowFilters] = useState(!compact)
@@ -64,7 +66,7 @@ export function SearchView({ lib, settings, compact, preset }: { lib: Library; s
     const h = setTimeout(() => setDebounced(query), 180)
     return () => clearTimeout(h)
   }, [query])
-  useEffect(() => setPage(0), [debounced, authors, since, until, folder, has, checkedTags, status, source, sort])
+  useEffect(() => setPage(0), [debounced, authors, since, until, folder, has, checkedTags, status, source, account, sort])
   useEffect(() => setBatchSize(settings.exportBatchSize || 1000), [settings.exportBatchSize])
 
   const authorMarks = useAuthorMarks()
@@ -78,9 +80,10 @@ export function SearchView({ lib, settings, compact, preset }: { lib: Library; s
       anyTags: checkedTags.length ? checkedTags : undefined,
       status,
       source,
+      accounts: account ? [account] : undefined,
       authorMarkLookup: authorMarks.lookup,
     }),
-    [authors, since, until, folder, has, checkedTags, status, source, authorMarks.lookup],
+    [authors, since, until, folder, has, checkedTags, status, source, account, authorMarks.lookup],
   )
 
   useEffect(() => {
@@ -236,6 +239,7 @@ export function SearchView({ lib, settings, compact, preset }: { lib: Library; s
           {SORTS.map((s) => <option key={s} value={s}>{t(`sort_${s}` as Key)}</option>)}
         </select>
       </div>
+      <AccountSwitch value={account} onChange={setAccount} revision={lib.version} />
       <TagCheckboxList tags={lib.tags} checked={checkedTags} onChange={setCheckedTags} />
       {warnings.length > 0 && <div className="warn-line">⚠ {warnings.join(', ')}</div>}
       {lib.indexing && (

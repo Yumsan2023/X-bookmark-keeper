@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { applyRestorePlan, backupFileName, collectFullBackup } from '@/backup/io'
 import { backupExceedsSizeLimit, inspectBackupText, serializeBackup, type BackupError, type BackupSummary, type RestorePlan, type SecretName } from '@/backup/full'
+import { UNKNOWN_ACCOUNT } from '@/shared/accounts'
 import { saveBlob } from '../util'
 import { useT, type Key } from '../i18n'
 
@@ -83,7 +84,12 @@ export function FullBackupPanel({ onNotify, onLibraryChange }: { onNotify?: (mes
     setErr('')
     try {
       await applyRestorePlan(preview)
-      const message = preview.kind === 'bookmarks-legacy' ? t('full_backup_done_legacy') : t('full_backup_done')
+      const message =
+        preview.kind === 'bookmarks-account'
+          ? t('account_export_done_restore')
+          : preview.kind === 'bookmarks-legacy'
+            ? t('full_backup_done_legacy')
+            : t('full_backup_done')
       setPreview(null)
       onLibraryChange?.()
       onNotify?.(message)
@@ -145,6 +151,10 @@ function Preview({
   const t = useT()
   const summary = plan.summary
   const legacy = plan.kind === 'bookmarks-legacy'
+  const accountFile = plan.kind === 'bookmarks-account'
+  const full = plan.kind === 'full'
+  const accountLabel =
+    plan.account === UNKNOWN_ACCOUNT ? t('account_unknown') : plan.account ? `@${plan.account}` : ''
   return (
     <div className="backup-preview">
       <h4>{t('full_backup_preview')}</h4>
@@ -153,26 +163,34 @@ function Preview({
         {summary.appVersion ? ` · ${summary.appVersion}` : ''}
       </p>
       {summary.exportedAt && <p className="muted">{summary.exportedAt}</p>}
+      {accountFile && accountLabel && <p>{t('account_export_file_account', { account: accountLabel })}</p>}
+      {accountFile && plan.includeUnknown && plan.account !== UNKNOWN_ACCOUNT && (
+        <p className="muted">{t('account_export_file_unknown')}</p>
+      )}
       <ul className="backup-stats">
         <Stat label={t('full_backup_posts')} value={summary.posts} />
         <Stat label={t('full_backup_folders')} value={summary.folders} />
-        {!legacy && <Stat label={t('full_backup_ledger')} value={summary.ledgerAccounts} />}
-        {!legacy && <Stat label={t('full_backup_flags')} value={summary.authorFlags} />}
-        {!legacy && <Stat label={t('full_backup_packs')} value={summary.keywordPacks} />}
-        {!legacy && <Stat label={t('full_backup_rules')} value={summary.keywordRules} />}
-        {!legacy && <Stat label={t('full_backup_vetoes')} value={summary.vetoes} />}
-        {!legacy && <Stat label={t('full_backup_community')} value={summary.communityLists} />}
-        {!legacy && <Stat label={t('full_backup_queue')} value={summary.queue} />}
-        {!legacy && <Stat label={t('full_backup_hidden')} value={summary.hidden} />}
+        {full && <Stat label={t('full_backup_ledger')} value={summary.ledgerAccounts} />}
+        {full && <Stat label={t('full_backup_flags')} value={summary.authorFlags} />}
+        {full && <Stat label={t('full_backup_packs')} value={summary.keywordPacks} />}
+        {full && <Stat label={t('full_backup_rules')} value={summary.keywordRules} />}
+        {full && <Stat label={t('full_backup_vetoes')} value={summary.vetoes} />}
+        {full && <Stat label={t('full_backup_community')} value={summary.communityLists} />}
+        {full && <Stat label={t('full_backup_queue')} value={summary.queue} />}
+        {full && <Stat label={t('full_backup_hidden')} value={summary.hidden} />}
       </ul>
-      {!legacy && <SecretLine summary={summary} />}
+      {full && <SecretLine summary={summary} />}
       <div className="backup-warn" role="note">
-        <strong>{legacy ? t('full_backup_warn_legacy_title') : t('full_backup_warn_title')}</strong>
-        <p>{legacy ? t('full_backup_warn_legacy') : t('full_backup_warn_replace')}</p>
+        <strong>
+          {accountFile ? t('account_export_warn_title') : legacy ? t('full_backup_warn_legacy_title') : t('full_backup_warn_title')}
+        </strong>
+        <p>
+          {accountFile ? t('account_export_warn') : legacy ? t('full_backup_warn_legacy') : t('full_backup_warn_replace')}
+        </p>
       </div>
       <div className="row wrap">
-        <button type="button" className="danger" disabled={busy} onClick={onConfirm}>
-          {legacy ? t('full_backup_confirm_legacy') : t('full_backup_confirm')}
+        <button type="button" className={accountFile ? 'primary' : 'danger'} disabled={busy} onClick={onConfirm}>
+          {accountFile ? t('account_export_confirm') : legacy ? t('full_backup_confirm_legacy') : t('full_backup_confirm')}
         </button>
         <button type="button" disabled={busy} onClick={onCancel}>{t('full_backup_cancel')}</button>
       </div>

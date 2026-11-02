@@ -95,6 +95,24 @@ nav { display:flex; gap:4px; flex:1; }
 .stamp-account input { min-width:160px; }
 .spacer { flex:1; } .muted { color: var(--muted); font-size: 12.5px; } .ok { color: var(--ok); } .err { color: var(--danger); }
 .searchbar { display:flex; gap:8px; } .searchbar .q { flex:1; padding:8px 12px; font-size:15px; }
+.account-switch {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  margin: 8px 0 2px; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--card-2);
+}
+.account-switch-label { font-size: 13px; font-weight: 700; color: var(--fg); margin-right: 2px; }
+.account-switch-chip {
+  border-radius: 999px; padding: 6px 12px; font-size: 13px; font-weight: 650;
+  background: var(--surface); border: 1px solid var(--border); color: var(--fg);
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.account-switch-chip:hover { border-color: var(--accent); }
+.account-switch-chip.active {
+  background: var(--tab-active-bg); color: var(--tab-active-fg); border-color: var(--tab-active-bg);
+}
+.account-switch-count {
+  font-variant-numeric: tabular-nums; font-weight: 600; font-size: 12px; opacity: 0.75;
+}
 .filters { display:grid; grid-template-columns: repeat(auto-fill,minmax(160px,1fr)); gap:8px; background:var(--card); border:1px solid var(--border); padding:10px; border-radius:8px; margin-top:8px; }
 .filters label { display:flex; flex-direction:column; font-size:12px; color:var(--muted); gap:2px; }
 .checks { display:flex; gap:10px; align-items:end; flex-wrap:wrap; } .checks label { flex-direction:row; align-items:center; gap:4px; color:var(--fg); }

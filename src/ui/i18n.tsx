@@ -274,6 +274,11 @@ const dict = {
   account: { zh: '账号', en: 'Account' },
   account_filter: { zh: '收藏账号', en: 'Bookmarked by' },
   account_unknown: { zh: '未知账号 (v0.5.0 前同步)', en: 'Unknown (synced before v0.5.0)' },
+  account_unknown_short: { zh: '未知账号', en: 'Unknown' },
+  account_switch_hint: {
+    zh: '只看这个账号收藏的书签。和筛选里的「收藏账号」是同一个条件，当前结果的导出也会跟着变。',
+    en: 'Show bookmarks collected by this account. This is the same Bookmarked-by filter, so exporting the current results follows it.',
+  },
   account_badge_title: { zh: '收藏该书签的 X 账号', en: 'X account(s) that bookmarked this' },
   stamp_account: { zh: '本次收藏账号', en: 'Stamp bookmarks as' },
   stamp_detected: { zh: '检测到当前登录 @{acct}', en: 'Detected login @{acct}' },
@@ -383,6 +388,45 @@ const dict = {
   full_backup_err_ledger: { zh: '这是打击账本单独导出的 JSON，不含书签库。请到「打击账本 → 数据」导入，或改用全量备份。', en: 'This is a ledger-only JSON export and does not include bookmarks. Import it under Strike Ledger → Data, or use a full backup.' },
   full_backup_err_write: { zh: '没有写完。请再试一次。', en: 'The write did not finish. Try again.' },
   full_backup_err_partial: { zh: '书签库已经按备份写上，打击账本没有写上。请再恢复一次。', en: 'The bookmark library was written, but the strike ledger was not. Restore the file again.' },
+  account_export_title: { zh: '按账号导出书签', en: 'Export bookmarks for one account' },
+  account_export_help: {
+    zh: '只下载一个收藏账号的书签，连同这些帖子上的标签、文件夹和笔记。不是全量备份，不含打击账本、词库或设置。另一个账号单独收藏的帖子不会写入。一条帖子被多个账号收藏时，只要包含所选账号就会导出，文件里仍保留它的全部账号标记。',
+    en: 'Downloads bookmarks for one collector account, including tags, folders, and notes on those posts. This is not a full backup and leaves out the strike ledger, packs, and settings. Posts bookmarked only by another account stay out. A post owned by several accounts is included when the chosen handle is one of them, and the file keeps every owner on that post.',
+  },
+  account_export_pick: { zh: '收藏账号', en: 'Bookmarked by' },
+  account_export_placeholder: { zh: '选择账号', en: 'Choose an account' },
+  account_export_none_accounts: {
+    zh: '书签库里还没有收藏账号标记。先用各账号分别做一次全量同步，或选择「未知账号」导出尚未标记的书签。',
+    en: 'No bookmark account stamps yet. Run a full sync for each account, or choose Unknown to export rows that still have no stamp.',
+  },
+  account_export_include_unknown: { zh: '同时包含未知账号', en: 'Also include unknown account' },
+  account_export_include_unknown_hint: {
+    zh: '把还没有收藏账号标记的书签一并写入（多半是 v0.5 之前同步的）。时间线上抓来的帖子不算。',
+    en: 'Also write bookmarks that have no collector stamp (mostly synced before v0.5). Timeline captures are not included.',
+  },
+  account_export_restore_hint: {
+    zh: '文件名类似 bookmark-keeper-账号-日期.json。它是书签库文件，并带 format: bookmark-keeper-account。用上面的「从备份恢复」选中后，会合并进书签库：同 ID 以文件为准，标签和收藏账号取并集，文件里没有的帖子留在本机。其它账号和打击账本不会被整包替换。请保留 format 字段；去掉之后，这份文件会被当成旧的整库书签备份。',
+    en: 'The file is named like bookmark-keeper-account-date.json. It is a bookmark library and carries format: bookmark-keeper-account. Choose it with Restore from backup above to merge it in: the same post id takes the file’s copy, tags and collector accounts are combined, and posts missing from the file stay. Other accounts and the strike ledger are not replaced as a whole. Keep the format field. Without it, the file is treated as an older whole-library bookmark backup.',
+  },
+  account_export_button: { zh: '导出该账号书签', en: 'Export this account’s bookmarks' },
+  account_export_exporting: { zh: '正在导出…', en: 'Exporting…' },
+  account_export_done: {
+    zh: '已导出 {account} 的 {n} 条书签。文件在本机，没有上传。可以用上面的「从备份恢复」合并回来。',
+    en: 'Saved {n} bookmarks for {account} on this device. Nothing was uploaded. Restore from backup above can merge them back.',
+  },
+  account_export_empty: { zh: '这个账号没有可导出的书签。', en: 'This account has no bookmarks to export.' },
+  account_export_file_account: { zh: '范围：{account}', en: 'Scope: {account}' },
+  account_export_file_unknown: { zh: '同时包含尚未标记收藏账号的书签。', en: 'Also includes bookmarks with no collector stamp.' },
+  account_export_warn_title: { zh: '合并进书签库，不是整库替换', en: 'Merge into the library, not a full replace' },
+  account_export_warn: {
+    zh: '确认后把这份文件里的书签合并进本机书签库。同 ID 的帖子改用文件里的正文、笔记和文件夹，标签和收藏账号与本机取并集。文件里没有的书签会留下。文件夹只补上文件里有的，不删除其它文件夹。打击账本、词库、队列和设置不动。正在进行的同步进度会被清掉。不会上传。',
+    en: 'Confirming merges the bookmarks in this file into the local library. The same post id takes the file’s text, note, and folder; tags and collector accounts are combined with what is already here. Bookmarks missing from the file stay. Folders in the file are added, and other folders are not deleted. The strike ledger, packs, queue, and settings stay. An in-progress sync is cleared. Nothing is uploaded.',
+  },
+  account_export_confirm: { zh: '确认合并进书签库', en: 'Merge into the bookmark library' },
+  account_export_done_restore: {
+    zh: '已把这份账号书签合并进书签库。其它账号的书签还在，打击账本没有改。',
+    en: 'Those account bookmarks were merged into the library. Other accounts’ bookmarks are still here, and the strike ledger was not changed.',
+  },
 } as const
 
 export type Key = keyof typeof dict
