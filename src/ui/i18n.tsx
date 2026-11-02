@@ -274,6 +274,11 @@ const dict = {
   account: { zh: '账号', en: 'Account' },
   account_filter: { zh: '收藏账号', en: 'Bookmarked by' },
   account_unknown: { zh: '未知账号 (v0.5.0 前同步)', en: 'Unknown (synced before v0.5.0)' },
+  account_unknown_short: { zh: '未知账号', en: 'Unknown' },
+  account_switch_hint: {
+    zh: '只看这个账号收藏的书签。和筛选里的「收藏账号」是同一个条件，当前结果的导出也会跟着变。',
+    en: 'Show bookmarks collected by this account. This is the same Bookmarked-by filter, so exporting the current results follows it.',
+  },
   account_badge_title: { zh: '收藏该书签的 X 账号', en: 'X account(s) that bookmarked this' },
   stamp_account: { zh: '本次收藏账号', en: 'Stamp bookmarks as' },
   stamp_detected: { zh: '检测到当前登录 @{acct}', en: 'Detected login @{acct}' },

@@ -6,6 +6,7 @@ import type { Hit } from '@/search/engine'
 import { duplicateGroups, extraIds, groupByOriginal, type QuoteGroup } from '@/library/quote-groups'
 import type { MediaItem } from '@/shared/types'
 import { AccountBadges, dragBookmarkIds } from '../AccountBadges'
+import { AccountSwitch } from '../AccountSwitch'
 import { AuthorMarkButtons, AuthorMarkChips, authorOutlineClass } from '../AuthorMarks'
 import { commitAuthorFlags, type AuthorFlagName } from '../../author-flags'
 import { confirmUnbookmark } from '../../unbookmark'
@@ -302,6 +303,12 @@ export function LibraryView({
           />
         </div>
       </div>
+
+      <AccountSwitch
+        value={filter.account}
+        revision={lib.version}
+        onChange={(account) => setFilter((cur) => ({ ...cur, account }))}
+      />
 
       <div className="lib-toolbar">
         <div className="lib-toolbar-group">
