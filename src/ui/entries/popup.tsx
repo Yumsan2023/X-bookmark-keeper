@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
+import { applyUiFontSize } from '@/shared/ui-font'
 import { useLibrary, useSettings } from '../hooks'
 import { I18nProvider, useT } from '../i18n'
 import { DialogProvider } from '../components/Dialogs'
@@ -37,6 +38,9 @@ function Root() {
     root.classList.remove('theme-x-dark', 'theme-x-light')
     root.classList.add(themeClass)
   }, [themeClass])
+  useEffect(() => {
+    applyUiFontSize(s.uiFontSize)
+  }, [s.uiFontSize])
   return (
     <I18nProvider lang={s.lang}>
       <DialogProvider><Popup themeClass={themeClass} /></DialogProvider>

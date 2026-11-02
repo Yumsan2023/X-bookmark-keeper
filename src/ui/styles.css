@@ -72,9 +72,16 @@ button.link-btn.danger { color: var(--danger); }
 button.link-btn { border:0; background:none; color: var(--accent); padding:0 4px; }
 button.x { border:0; background:none; padding:0 2px; color: var(--muted); }
 input[type=checkbox] { padding:0; }
+input[type=range] { width: 100%; padding: 0; background: transparent; border: 0; accent-color: var(--accent); }
+.font-size-row { display: flex; align-items: center; gap: 10px; }
+.font-size-row input[type=range] { flex: 1; }
+.font-size-value { min-width: 4.5em; color: var(--fg); font-variant-numeric: tabular-nums; }
 .app { max-width: 980px; margin: 0 auto; padding: 12px 16px 60px; }
+/* Options page: the shell includes the sidebar and must fill the window.
+   A 1280px cap left a blank strip on the right of wide Chrome windows. */
+.app.full,
 .app.theme-x-dark.full,
-.app.theme-x-light.full { max-width: 1280px; }
+.app.theme-x-light.full { max-width: none; width: 100%; margin: 0; }
 .main-library { margin: 0 -8px; }
 .app.side { max-width: none; padding: 8px; }
 .topbar { display:flex; align-items:center; gap:16px; flex-wrap:wrap; margin-bottom:8px; }
@@ -84,6 +91,8 @@ nav { display:flex; gap:4px; flex:1; }
 .tab.active { background: var(--tab-active-bg); color: var(--tab-active-fg); font-weight: 700; }
 .mini-sync { margin-bottom:8px; } .mini-sync:empty { display:none; }
 .row { display:flex; gap:8px; align-items:center; } .row.wrap { flex-wrap:wrap; } .row.end { justify-content:flex-end; margin-top:12px; }
+.stamp-account { display:flex; flex-direction:column; gap:6px; margin:8px 0; }
+.stamp-account input { min-width:160px; }
 .spacer { flex:1; } .muted { color: var(--muted); font-size: 12.5px; } .ok { color: var(--ok); } .err { color: var(--danger); }
 .searchbar { display:flex; gap:8px; } .searchbar .q { flex:1; padding:8px 12px; font-size:15px; }
 .filters { display:grid; grid-template-columns: repeat(auto-fill,minmax(160px,1fr)); gap:8px; background:var(--card); border:1px solid var(--border); padding:10px; border-radius:8px; margin-top:8px; }
@@ -414,7 +423,16 @@ td.lib-user { display: flex; }
 .lib-row-action.danger:hover { color: var(--danger); border-color: var(--danger); }
 
 /* v0.6 shell + v0.7 strike host */
-.app.with-sidebar { max-width: none; height: 100vh; min-height: 100vh; margin: 0; padding: 0; display: flex; overflow: hidden; }
+.app.with-sidebar {
+  max-width: none;
+  /* html zoom scales the painted size, so the layout height is the viewport divided by that zoom. */
+  height: calc(100vh / var(--ui-zoom, 1));
+  min-height: calc(100vh / var(--ui-zoom, 1));
+  margin: 0;
+  padding: 0;
+  display: flex;
+  overflow: hidden;
+}
 .sidebar { border-right: 1px solid var(--border); background: var(--surface); flex-direction: column; flex-shrink: 0; gap: 8px; width: 196px; padding: 12px 8px 16px; display: flex; overflow: auto; }
 .sidebar-brand { border-bottom: 1px solid var(--border); align-items: center; gap: 8px; padding: 4px 8px 10px; display: flex; }
 .sidebar-logo { font-size: 22px; }

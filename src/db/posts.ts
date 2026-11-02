@@ -112,12 +112,22 @@ export async function markTweetsDeleted(ids: string[], runId: string): Promise<n
 /**
  * 全量同步结束后: 本次 run 没看到的 active 书签 = X 端已取消书签, 本地标记 unbookmarked (不删除)。
  * safetyMin: 本次 run 看到的书签数低于该值而本地很多时视为异常, 不执行 (防止接口返回空页造成误标)。
+ *
+ * 有 owner 时只移掉这个账号的标记; 其他账号还在就保持 active, 也不动没有账号的旧数据。
+ * 没有 owner 时, 库里已有账号标记, 或调用方说明「本应有账号」(expectAccount), 一律不把空白账号整库标成已取消。
+ * 返回 -2 表示因此跳过。
  */
-export async function markUnbookmarkedNotSeen(runId: string, seenCount: number, account?: string): Promise<number> {
+export async function markUnbookmarkedNotSeen(
+  runId: string,
+  seenCount: number,
+  account?: string,
+  opts?: { expectAccount?: boolean },
+): Promise<number> {
   const isBookmark = (p: Post) => postSource(p) === 'bookmark'
   const owner = normalizeHandle(account)
-  // No confirmed account, but the library already has account stamps: do not mass-unbookmark other accounts.
   if (!owner) {
+    if (opts?.expectAccount) return -2
+    // No confirmed account, but the library already has account stamps: do not mass-unbookmark other accounts.
     const stamped = await db.posts.orderBy('accounts').limit(1).count()
     if (stamped > 0) return -2
     const bookmarkActive = await db.posts.where('status').equals('active').filter(isBookmark).count()

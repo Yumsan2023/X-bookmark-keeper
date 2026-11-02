@@ -242,10 +242,34 @@ export class XClient {
   }
 
   /**
-   * 用当前会话拉账号设置, 拿到自己的 screen_name。
-   * 走 REST /1.1/account/settings.json (与 GraphQL 共用鉴权头与 cookie)。
+   * 用当前会话拉自己的 screen_name。
+   * 先 REST /1.1/account/settings.json, 失败再试 verify_credentials.json。
+   * 与 GraphQL 共用鉴权头与 cookie。限流立即抛出, 不连打第二个接口。
    */
   async getAccountSettings(): Promise<{ screen_name: string }> {
+    const auth = await this.deps.getAuth()
+    if (!auth?.token || !auth.csrf) {
+      throw new XApiError('auth', '未捕获到登录凭证: 请先在已登录的浏览器中打开 x.com 并刷新一次')
+    }
+    const urls = [
+      'https://x.com/i/api/1.1/account/settings.json',
+      'https://x.com/i/api/1.1/account/verify_credentials.json?include_entities=false&skip_status=true',
+    ]
+    let last: XApiError = new XApiError('data', '无法确认当前登录账号')
+    for (const url of urls) {
+      try {
+        const screen_name = await this.readAccountScreenName(url)
+        if (screen_name) return { screen_name }
+        last = new XApiError('data', '账号接口未返回 screen_name')
+      } catch (e) {
+        if (e instanceof XApiError && e.code === 'rate_limit') throw e
+        last = e instanceof XApiError ? e : new XApiError('network', (e as Error)?.message || 'network error')
+      }
+    }
+    throw last
+  }
+
+  private async readAccountScreenName(url: string): Promise<string> {
     const auth = await this.deps.getAuth()
     if (!auth?.token || !auth.csrf) {
       throw new XApiError('auth', '未捕获到登录凭证: 请先在已登录的浏览器中打开 x.com 并刷新一次')
@@ -259,19 +283,7 @@ export class XClient {
     }
     if (auth.uuid) headers['x-client-uuid'] = auth.uuid
     if (auth.transaction_id) headers['x-client-transaction-id'] = auth.transaction_id
-    const url = 'https://x.com/i/api/1.1/account/settings.json'
-    const timeout = this.deps.timeoutMs ?? 15000
-    const ctrl = new AbortController()
-    const timer = setTimeout(() => ctrl.abort(), timeout)
-    let res: Response
-    try {
-      res = await (this.deps.fetchImpl ?? fetch)(url, { method: 'GET', credentials: 'include', headers, signal: ctrl.signal })
-    } catch (e: any) {
-      if (e?.name === 'AbortError') throw new XApiError('timeout', `请求超时 (${timeout}ms)`)
-      throw new XApiError('network', e?.message || 'network error')
-    } finally {
-      clearTimeout(timer)
-    }
+    const res = await this.fetchWithTimeout(url, { method: 'GET', credentials: 'include', headers })
     if (res.status === 401 || res.status === 403) {
       throw new XApiError('auth', `鉴权失败 (HTTP ${res.status})`, { status: res.status })
     }
@@ -285,8 +297,6 @@ export class XClient {
       throw new XApiError('data', `HTTP ${res.status}: ${text.slice(0, 200)}`, { status: res.status })
     }
     const json = await res.json()
-    const screen_name = String(json?.screen_name ?? '').replace(/^@/, '')
-    if (!screen_name) throw new XApiError('data', 'account/settings 未返回 screen_name')
-    return { screen_name }
+    return String(json?.screen_name ?? '').replace(/^@/, '').trim()
   }
 }

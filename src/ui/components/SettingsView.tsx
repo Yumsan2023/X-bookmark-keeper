@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { clearAll } from '@/db/posts'
+import { applyUiFontSize, clampUiFontSize, UI_FONT_STEPS } from '@/shared/ui-font'
 import type { Settings } from '@/shared/types'
 import { useT } from '../i18n'
 import type { Library } from '../hooks'
@@ -67,6 +68,36 @@ export function SettingsView({ settings, save, lib, onNotify }: { settings: Sett
           <option value="light">{t('theme_light')}</option>
         </select>
       </label>
+      <label>
+        {t('font_size')}
+        <span className="font-size-row">
+          <input
+            type="range"
+            min={0}
+            max={UI_FONT_STEPS.length - 1}
+            step={1}
+            aria-valuemin={UI_FONT_STEPS[0]}
+            aria-valuemax={UI_FONT_STEPS[UI_FONT_STEPS.length - 1]}
+            aria-valuenow={clampUiFontSize(s.uiFontSize)}
+            aria-label={t('font_size')}
+            value={Math.max(0, UI_FONT_STEPS.indexOf(clampUiFontSize(s.uiFontSize) as (typeof UI_FONT_STEPS)[number]))}
+            onInput={(e) => {
+              const uiFontSize = UI_FONT_STEPS[Number(e.currentTarget.value)] ?? clampUiFontSize(s.uiFontSize)
+              setS((cur) => ({ ...cur, uiFontSize }))
+              applyUiFontSize(uiFontSize)
+            }}
+            onChange={async (e) => {
+              const uiFontSize = UI_FONT_STEPS[Number(e.currentTarget.value)] ?? clampUiFontSize(s.uiFontSize)
+              const next = { ...s, uiFontSize }
+              setS(next)
+              applyUiFontSize(uiFontSize)
+              await save(next)
+            }}
+          />
+          <span className="font-size-value">{clampUiFontSize(s.uiFontSize)} px</span>
+        </span>
+      </label>
+      <p className="muted">{t('font_size_hint')}</p>
       {check('syncFolders', 'opt_sync_folders')}
       {check('detectDeleted', 'opt_detect_deleted')}
       {check('fetchThreads', 'opt_fetch_threads')}

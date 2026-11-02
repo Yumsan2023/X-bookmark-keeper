@@ -26,6 +26,7 @@ import {
   decorateTagChips,
   foldAccent,
 } from "../lib/pure.js";
+import { screenNameFromAccountLabel, screenNameFromProfileHref } from "../../shared/accounts.ts";
 import { performPlatformAction } from "./act.js";
 import { createHoverCard, createOverlay, mountBar, mountInline, openAiSuggest, openChoice, openFalsePositive, openPicker, toast } from "./view.js";
 
@@ -1327,10 +1328,25 @@ async function openHover(anchor, token) {
   if (next) hoverUi.show(next, anchor);
 }
 
+function readLoggedInScreenName() {
+  const link = document.querySelector('a[data-testid="AppTabBar_Profile_Link"]');
+  const fromHref = screenNameFromProfileHref(link && link.getAttribute("href"));
+  if (fromHref) return fromHref;
+  const btn = document.querySelector('[data-testid="SideNav_AccountSwitcher_Button"]');
+  const fromLabel = screenNameFromAccountLabel(btn && (btn.innerText || btn.textContent));
+  if (fromLabel) return fromLabel;
+  const switcherLink = btn && btn.querySelector("a[href]");
+  return screenNameFromProfileHref(switcherLink && switcherLink.getAttribute("href"));
+}
+
 export async function start() {
   dict = await loadDict();
   overlay = createOverlay();
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type === "BOOKMARK_ACCOUNT") {
+      sendResponse({ ok: true, screen_name: readLoggedInScreenName() });
+      return;
+    }
     if (message?.type !== "KEYWORD_RESULT") return;
     onKeywordResult(message);
     sendResponse({ ok: true });

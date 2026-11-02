@@ -1,6 +1,6 @@
 import { XClient } from '@/api/client'
 import { OPERATIONS } from '@/api/endpoints'
-import { normalizeHandle } from '@/shared/accounts'
+import { canonicalScreenName, screenNameFromAccountLabel, screenNameFromProfileHref } from '@/shared/accounts'
 import { getAuth, getProgress, getSettings, getTimelineProgress, saveProgress, saveTimelineProgress, bumpDbVersion, saveLastFullSync } from '@/shared/storage'
 import { STORAGE_KEYS, type BgRequest, type BgResponse } from '@/shared/types'
 import { cancelTask, deleteBookmarks, fetchThreads, pushFolder } from './actions'
@@ -31,19 +31,75 @@ export const engine = new SyncEngine({
   onDbChanged: bumpDbVersion,
   onFullSyncDone: (meta) => saveLastFullSync(meta),
   scheduleWake: (at) => chrome.alarms.create('bk-resume', { when: at }),
+  knownAccounts: listKnownBookmarkAccounts,
 })
 
-/** Screen name of the logged-in X account, remembered under bk_accounts (not the strike ledger). */
-export async function resolveCurrentAccount(): Promise<{ screen_name: string; user_id?: string }> {
-  const { screen_name } = await client.getAccountSettings()
-  const name = normalizeHandle(screen_name)
-  if (!name) throw new Error('无法确认当前登录的 X 账号')
-  const auth = await getAuth()
-  const stored = ((await chrome.storage.local.get(STORAGE_KEYS.accounts))[STORAGE_KEYS.accounts] ?? {}) as Record<string, { user_id?: string; last_seen_at?: number }>
+type StoredAccounts = Record<string, { user_id?: string; last_seen_at?: number }>
+
+async function readStoredAccounts(): Promise<StoredAccounts> {
+  return ((await chrome.storage.local.get(STORAGE_KEYS.accounts))[STORAGE_KEYS.accounts] ?? {}) as StoredAccounts
+}
+
+export async function listKnownBookmarkAccounts(): Promise<string[]> {
+  return Object.keys(await readStoredAccounts())
+}
+
+/** Remember a bookmark owner. Does not touch the strike ledger. */
+export async function rememberBookmarkAccount(screenName: string, userId?: string): Promise<void> {
+  const name = canonicalScreenName(screenName)
+  if (!name) return
+  const stored = await readStoredAccounts()
   const prev = stored[name] ?? {}
-  stored[name] = { user_id: auth?.user_id ?? prev.user_id, last_seen_at: Date.now() }
-  await chrome.storage.local.set({ [STORAGE_KEYS.accounts]: stored })
-  return { screen_name: name, user_id: stored[name].user_id }
+  stored[name] = { user_id: userId || prev.user_id, last_seen_at: Date.now() }
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.accounts]: stored,
+    [STORAGE_KEYS.stampAccount]: name,
+  })
+}
+
+/**
+ * Screen name of the logged-in X account.
+ * REST settings (then verify_credentials) first; if that fails, the open x.com tab's profile link.
+ * user_id is attached only when the name came from the signed-in API, so a stale captured session
+ * is not glued onto a different tab account.
+ */
+export async function resolveCurrentAccount(): Promise<{ screen_name: string; user_id?: string }> {
+  let screen = ''
+  let userId: string | undefined
+  try {
+    screen = canonicalScreenName((await client.getAccountSettings()).screen_name)
+    if (screen) userId = (await getAuth())?.user_id
+  } catch {
+    screen = ''
+  }
+  if (!screen) screen = await screenNameFromOpenTabs()
+  if (!screen) throw new Error('无法确认当前登录的 X 账号')
+  await rememberBookmarkAccount(screen, userId)
+  return { screen_name: screen, user_id: userId }
+}
+
+async function screenNameFromOpenTabs(): Promise<string> {
+  if (typeof chrome === 'undefined' || !chrome.tabs?.query || !chrome.tabs?.sendMessage) return ''
+  let tabs: chrome.tabs.Tab[] = []
+  try {
+    tabs = await chrome.tabs.query({
+      url: ['https://x.com/*', 'https://twitter.com/*', 'https://mobile.x.com/*', 'https://mobile.twitter.com/*'],
+    })
+  } catch {
+    return ''
+  }
+  const ordered = [...tabs].sort((a, b) => Number(b.active) - Number(a.active) || (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0))
+  for (const tab of ordered) {
+    if (tab.id == null) continue
+    try {
+      const res = (await chrome.tabs.sendMessage(tab.id, { type: 'BOOKMARK_ACCOUNT' })) as { screen_name?: string } | undefined
+      const name = canonicalScreenName(res?.screen_name) || screenNameFromProfileHref(res?.screen_name) || screenNameFromAccountLabel(res?.screen_name)
+      if (name) return name
+    } catch {
+      /* this tab has no content script yet */
+    }
+  }
+  return ''
 }
 
 export const timelineEngine = new TimelineSyncEngine({
@@ -70,11 +126,13 @@ function stopKeepAlive() {
   keepAlive = undefined
 }
 
-export async function startSync(mode: 'incremental' | 'full' | 'resume') {
+export async function startSync(mode: 'incremental' | 'full' | 'resume', account?: string) {
   if (engine.isRunning) return
   if (timelineEngine.isRunning) throw new Error('时间线同步进行中, 请先完成或取消后再同步书签')
+  const name = canonicalScreenName(account)
+  if (name) await rememberBookmarkAccount(name)
   startKeepAlive()
-  void engine.start(mode).finally(stopKeepAlive)
+  void engine.start(mode, name ? { account: name } : undefined).finally(stopKeepAlive)
 }
 
 export async function startTimeline(handle: string) {
@@ -107,14 +165,14 @@ export async function handleMessage(msg: BgRequest): Promise<BgResponse> {
   try {
     switch (msg.type) {
       case 'sync/start':
-        await startSync(msg.mode)
+        await startSync(msg.mode, msg.account)
         return { ok: true }
       case 'sync/pause':
         engine.pause()
         return { ok: true }
       case 'sync/resume':
         if (engine.isRunning) engine.resume()
-        else await startSync('resume')
+        else await startSync('resume', msg.account)
         return { ok: true }
       case 'sync/cancel':
         if (engine.isRunning) engine.cancel()

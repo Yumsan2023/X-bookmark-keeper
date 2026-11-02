@@ -1,3 +1,4 @@
+import { clampUiFontSize } from './ui-font'
 import { DEFAULT_SETTINGS, STORAGE_KEYS, type AuthInfo, type LastFullSyncMeta, type Settings, type SyncProgress } from './types'
 import type { QueryIdMap } from '@/api/endpoints'
 
@@ -12,6 +13,7 @@ async function set(key: string, value: unknown): Promise<void> {
 export function mergeSettings(saved: Partial<Settings> | undefined): Settings {
   const merged = { ...DEFAULT_SETTINGS, ...(saved ?? {}), llm: { ...DEFAULT_SETTINGS.llm, ...(saved?.llm ?? {}) } }
   merged.theme = saved?.theme === 'light' ? 'light' : 'dark'
+  merged.uiFontSize = clampUiFontSize(merged.uiFontSize)
   return merged
 }
 

@@ -137,6 +137,29 @@ describe('queryId discovery', () => {
   })
 })
 
+describe('getAccountSettings', () => {
+  it('returns screen_name from account/settings and does not call verify_credentials', async () => {
+    const f = vi.fn(async () => res(200, { screen_name: 'Alice' }))
+    await expect(mk(f).getAccountSettings()).resolves.toEqual({ screen_name: 'Alice' })
+    expect(f).toHaveBeenCalledTimes(1)
+    expect(String((f.mock.calls[0] as unknown as [string])[0])).toContain('/account/settings.json')
+  })
+
+  it('falls back to verify_credentials when settings does not return a handle', async () => {
+    const f = vi.fn(async (url: string) => (String(url).includes('settings.json') ? res(403, {}) : res(200, { screen_name: 'bob' })))
+    await expect(mk(f).getAccountSettings()).resolves.toEqual({ screen_name: 'bob' })
+    expect(f).toHaveBeenCalledTimes(2)
+    expect(String((f.mock.calls[1] as unknown as [string])[0])).toContain('verify_credentials.json')
+  })
+
+  it('does not call the second endpoint when settings is rate limited', async () => {
+    const f = vi.fn(async () => res(429, {}, { 'x-rate-limit-reset': '2000000000' }))
+    const e = await mk(f).getAccountSettings().catch((err) => err)
+    expect(e).toMatchObject({ code: 'rate_limit' })
+    expect(f).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('auth capture', () => {
   it('extracts bearer, csrf, uuid and transaction id (case-insensitive)', () => {
     const a = extractAuthFromHeaders(

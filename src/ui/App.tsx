@@ -12,6 +12,7 @@ import { ProgressBox, SyncControls, SyncView, TaskBox } from './components/SyncV
 import { SyncReportView } from './components/SyncReportView'
 import { StrikeLedgerView } from './components/StrikeLedgerView'
 import { folderColor, readDraggedIds } from './components/AccountBadges'
+import { applyUiFontSize } from '@/shared/ui-font'
 import { moveToFolder } from '@/db/posts'
 import type { Key } from './i18n'
 
@@ -116,6 +117,10 @@ function Shell({ mode }: { mode: 'full' | 'side' }) {
     root.classList.remove('theme-x-dark', 'theme-x-light')
     root.classList.add(themeClass)
   }, [themeClass])
+
+  useEffect(() => {
+    applyUiFontSize(settings.uiFontSize)
+  }, [settings.uiFontSize])
 
   const nav = mode === 'full' ? FULL_NAV : SIDE_NAV
   const showFolders = mode === 'full' && (tab === 'library' || tab === 'search' || tab === 'folders')
