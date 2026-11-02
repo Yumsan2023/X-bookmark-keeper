@@ -176,6 +176,11 @@ export interface Settings {
   lang: Lang
   /** UI theme; default dark (X-style) */
   theme: Theme
+  /**
+   * Extension page text size in px. Snapped to UI_FONT_STEPS.
+   * 14 is the original body size; the default is one step larger.
+   */
+  uiFontSize: number
   syncFolders: boolean
   detectDeleted: boolean
   fetchThreads: boolean
@@ -194,6 +199,7 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   lang: 'zh',
   theme: 'dark',
+  uiFontSize: 15,
   syncFolders: true,
   detectDeleted: true,
   fetchThreads: false,

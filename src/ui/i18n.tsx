@@ -109,6 +109,8 @@ const dict = {
   language: { zh: '界面语言', en: 'Language' },
   theme: { zh: '主题', en: 'Theme' },
   theme_dark: { zh: '深色', en: 'Dark' },
+  font_size: { zh: '界面字号', en: 'Text size' },
+  font_size_hint: { zh: '书签、列表、同步、设置、打击账本和弹窗共用。拖动后立即生效。', en: 'Used by bookmarks, the library, sync, settings, the strike ledger, and the popup. Applies as you drag.' },
   theme_light: { zh: '浅色', en: 'Light' },
   theme_toggle: { zh: '切换深色/浅色', en: 'Toggle dark/light theme' },
   llm: { zh: 'AI 内容标签 (OpenAI 兼容接口)', en: 'AI content tags (OpenAI-compatible)' },
