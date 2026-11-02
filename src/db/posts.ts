@@ -2,7 +2,12 @@ import { mergePostTags } from '@/ai/classify'
 import type { Folder, Post, PostSource } from '@/shared/types'
 import { postSource } from '@/shared/types'
 import type { ParsedPost } from '@/api/parser'
-import { addAccount, decideDelete, normalizeHandle, postAccounts } from '@/shared/accounts'
+import {
+  postMatchesAccountExport,
+  resolveAccountExportTarget,
+  type AccountExportSelection,
+} from '@/backup/account-library'
+import { UNKNOWN_ACCOUNT, addAccount, decideDelete, normalizeHandle, postAccounts } from '@/shared/accounts'
 import { db } from './db'
 
 /** 把解析结果合并进本地记录: 保留本地字段 (标签/文件夹/备注/线程/saved_at/source) */
@@ -180,12 +185,47 @@ export async function releaseBookmark(tweetId: string, account: string, removeLo
 export async function listBookmarkAccounts(): Promise<{ account: string; count: number }[]> {
   const keys = (await db.posts.orderBy('accounts').uniqueKeys()) as string[]
   const rows = await Promise.all(
-    keys.filter(Boolean).map(async (account) => ({
+    keys.filter((account) => account && account !== UNKNOWN_ACCOUNT).map(async (account) => ({
       account,
       count: await db.posts.where('accounts').equals(account).count(),
     })),
   )
   return rows.sort((a, b) => b.count - a.count || a.account.localeCompare(b.account))
+}
+
+/** Bookmarks synced before an account stamp existed. Timeline rows are not included. */
+export async function countUnstampedBookmarks(): Promise<number> {
+  return db.posts.filter((post) => postMatchesAccountExport(post, { account: UNKNOWN_ACCOUNT })).count()
+}
+
+/**
+ * Posts for a one-account library export.
+ * A named account uses the `accounts` index. Unstamped rows are not in that
+ * index, so including them (or exporting only them) reads the table.
+ */
+async function postsStampedAs(target: string): Promise<Post[]> {
+  const keys = ((await db.posts.orderBy('accounts').uniqueKeys()) as string[]).filter((key) => normalizeHandle(key) === target)
+  if (!keys.length) return []
+  const batches = await Promise.all(keys.map((key) => db.posts.where('accounts').equals(key).toArray()))
+  const byId = new Map<string, Post>()
+  for (const post of batches.flat()) {
+    if (postMatchesAccountExport(post, { account: target })) byId.set(post.tweet_id, post)
+  }
+  return [...byId.values()]
+}
+
+export async function postsForAccountExport(selection: AccountExportSelection): Promise<Post[]> {
+  const target = resolveAccountExportTarget(selection.account)
+  if (!target) return []
+  if (target === UNKNOWN_ACCOUNT) {
+    return db.posts.filter((post) => postMatchesAccountExport(post, { account: UNKNOWN_ACCOUNT })).toArray()
+  }
+  const named = await postsStampedAs(target)
+  if (!selection.includeUnknown) return named
+  const unknown = await db.posts.filter((post) => postMatchesAccountExport(post, { account: UNKNOWN_ACCOUNT })).toArray()
+  const byId = new Map<string, Post>()
+  for (const post of [...named, ...unknown]) byId.set(post.tweet_id, post)
+  return [...byId.values()]
 }
 
 export async function getAllPosts(): Promise<Post[]> {

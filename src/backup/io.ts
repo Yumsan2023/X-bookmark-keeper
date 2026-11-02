@@ -3,8 +3,10 @@
  * Strike writes go through the background lock (`REPLACE_STATE`).
  * The file never leaves the machine.
  */
+import { buildAccountLibraryExport, type AccountExportSelection, type AccountLibraryFile } from '@/backup/account-library'
 import { backupFileName, buildFullBackup, pickStrike, STRIKE_SECRET_KEY, STRIKE_STATE_KEY, type FullBackupFile, type RestorePlan } from '@/backup/full'
 import { db } from '@/db/db'
+import { importBackup, postsForAccountExport } from '@/db/posts'
 import { bumpDbVersion } from '@/shared/storage'
 import { STORAGE_KEYS, type AuthInfo, type Settings } from '@/shared/types'
 
@@ -110,7 +112,31 @@ async function replaceBookmarkStorage(plan: RestorePlan): Promise<void> {
   await chrome.storage.local.remove(remove)
 }
 
+export async function collectAccountLibraryExport(selection: AccountExportSelection, now = Date.now()): Promise<AccountLibraryFile | null> {
+  const [posts, folders] = await Promise.all([postsForAccountExport(selection), db.folders.toArray()])
+  return buildAccountLibraryExport({
+    posts,
+    folders,
+    account: selection.account,
+    includeUnknown: selection.includeUnknown,
+    now,
+  })
+}
+
 export async function applyRestorePlan(plan: RestorePlan): Promise<void> {
+  if (plan.kind === 'bookmarks-account') {
+    await importBackup({
+      app: 'bookmark-keeper',
+      version: 1,
+      exported_at: Date.now(),
+      posts: plan.posts,
+      folders: plan.folders,
+    })
+    await db.searchMeta.clear()
+    await chrome.storage.local.remove([...EPHEMERAL_KEYS])
+    await bumpDbVersion()
+    return
+  }
   await replaceBookmarkLibrary(plan.posts, plan.folders)
   if (plan.kind === 'bookmarks-legacy') {
     await chrome.storage.local.remove([...EPHEMERAL_KEYS])

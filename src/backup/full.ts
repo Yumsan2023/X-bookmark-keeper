@@ -4,12 +4,14 @@
  * travel together. API keys and the captured X session stay out unless
  * the user opts in. Nothing here uploads.
  */
+import { ACCOUNT_LIBRARY_FORMAT, resolveAccountExportTarget } from '@/backup/account-library'
+import { UNKNOWN_ACCOUNT } from '@/shared/accounts'
 import type { AuthInfo, Folder, Post, Settings } from '@/shared/types'
 import { mergeSettings } from '@/shared/storage'
 
 export const FULL_BACKUP_FORMAT = 'x-toolkit-full' as const
 export const FULL_BACKUP_VERSION = 1 as const
-export const APP_VERSION = '0.7.17'
+export const APP_VERSION = '0.7.18'
 /**
  * Shared ceiling for Settings → 从备份恢复.
  * `File.size` is bytes; `inspectBackupText` uses JavaScript string length.
@@ -79,7 +81,7 @@ export interface FullBackupFile {
 }
 
 export interface BackupSummary {
-  kind: 'full' | 'bookmarks-legacy'
+  kind: 'full' | 'bookmarks-legacy' | 'bookmarks-account'
   format: string
   version: number
   appVersion: string
@@ -99,15 +101,21 @@ export interface BackupSummary {
 }
 
 export interface RestorePlan {
-  kind: 'full' | 'bookmarks-legacy'
-  /** Whole-file replace. Legacy files replace the bookmark library only. */
-  mode: 'replace'
+  kind: 'full' | 'bookmarks-legacy' | 'bookmarks-account'
+  /**
+   * Full files replace extension data. Legacy bookmark-keeper files replace
+   * the bookmark library. An account library file merges into the library.
+   */
+  mode: 'replace' | 'merge'
   summary: BackupSummary
   posts: Post[]
   folders: Folder[]
   strike: StrikeSlice | null
   storage: FullBackupStorage | null
   secretsIncluded: boolean
+  /** Collector account on a bookmarks-account file. `__unknown__` is unstamped bookmarks. */
+  account?: string
+  includeUnknown?: boolean
 }
 
 export type BackupError = 'bad-json' | 'bad-file' | 'future-version' | 'too-large' | 'ledger-only'
@@ -325,6 +333,7 @@ function takeOmitted(raw: unknown): SecretName[] | null {
 }
 
 function isLegacyBookmark(raw: Record<string, unknown>): boolean {
+  if (raw.format === ACCOUNT_LIBRARY_FORMAT) return false
   return raw.app === 'bookmark-keeper' && raw.version === 1 && Array.isArray(raw.posts) && Array.isArray(raw.folders)
 }
 
@@ -335,6 +344,49 @@ function isLedgerOnly(raw: Record<string, unknown>): boolean {
 
 function oversizedLists(posts: unknown, folders: unknown): boolean {
   return (Array.isArray(posts) && posts.length > MAX_POSTS) || (Array.isArray(folders) && folders.length > MAX_FOLDERS)
+}
+
+function inspectAccountLibrary(raw: Record<string, unknown>): InspectResult {
+  if (raw.version !== 1) {
+    return { ok: false, error: typeof raw.version === 'number' && raw.version > 1 ? 'future-version' : 'bad-file' }
+  }
+  if (raw.app !== 'bookmark-keeper') return { ok: false, error: 'bad-file' }
+  if (oversizedLists(raw.posts, raw.folders)) return { ok: false, error: 'too-large' }
+  const posts = takePosts(raw.posts)
+  const folders = takeFolders(raw.folders)
+  if (!posts || !folders) return { ok: false, error: 'bad-file' }
+  const account = resolveAccountExportTarget(raw.account)
+  if (!account) return { ok: false, error: 'bad-file' }
+  if (raw.includeUnknown != null && typeof raw.includeUnknown !== 'boolean') return { ok: false, error: 'bad-file' }
+  const includeUnknown = account === UNKNOWN_ACCOUNT ? true : raw.includeUnknown === true
+  const exportedAt = typeof raw.exported_at === 'number' ? new Date(raw.exported_at).toISOString() : ''
+  const summary = summarizeParts({
+    kind: 'bookmarks-account',
+    format: ACCOUNT_LIBRARY_FORMAT,
+    version: 1,
+    appVersion: '',
+    exportedAt,
+    secretsIncluded: false,
+    omittedSecrets: [],
+    posts: posts.length,
+    folders: folders.length,
+    strike: null,
+  })
+  return {
+    ok: true,
+    plan: {
+      kind: 'bookmarks-account',
+      mode: 'merge',
+      summary,
+      posts,
+      folders,
+      strike: null,
+      storage: null,
+      secretsIncluded: false,
+      account,
+      includeUnknown,
+    },
+  }
 }
 
 function inspectLegacy(raw: Record<string, unknown>): InspectResult {
@@ -430,6 +482,7 @@ function inspectFull(raw: Record<string, unknown>): InspectResult {
 
 export function inspectBackup(raw: unknown): InspectResult {
   if (!isRecord(raw)) return { ok: false, error: 'bad-file' }
+  if (raw.format === ACCOUNT_LIBRARY_FORMAT) return inspectAccountLibrary(raw)
   if (isLegacyBookmark(raw)) return inspectLegacy(raw)
   if (raw.format === FULL_BACKUP_FORMAT) return inspectFull(raw)
   if (isLedgerOnly(raw)) return { ok: false, error: 'ledger-only' }

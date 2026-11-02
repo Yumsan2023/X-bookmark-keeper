@@ -5,6 +5,7 @@ import type { Settings } from '@/shared/types'
 import { useT } from '../i18n'
 import type { Library } from '../hooks'
 import { useDialogs } from './Dialogs'
+import { AccountBookmarkExport } from './AccountBookmarkExport'
 import { AuthorLinkSettings } from './AuthorLinkSettings'
 import { FullBackupPanel } from './FullBackupPanel'
 
@@ -17,6 +18,7 @@ export function SettingsView({ settings, save, lib, onNotify }: { settings: Sett
   const { confirm } = useDialogs()
   const [s, setS] = useState(settings)
   const [msg, setMsg] = useState('')
+  const [libraryRev, setLibraryRev] = useState(0)
   const [modelCustom, setModelCustom] = useState(() => !isCommonLlmModel(settings.llm.model))
   const up = (patch: Partial<Settings>) => setS((c) => ({ ...c, ...patch }))
   const upLlm = (patch: Partial<Settings['llm']>) => setS((c) => ({ ...c, llm: { ...c.llm, ...patch } }))
@@ -154,7 +156,14 @@ export function SettingsView({ settings, save, lib, onNotify }: { settings: Sett
 
       <h3>{t('data')}</h3>
       <p className="muted">{t('full_backup_replaces_old')}</p>
-      <FullBackupPanel onNotify={onNotify} onLibraryChange={() => void lib.reload()} />
+      <FullBackupPanel
+        onNotify={onNotify}
+        onLibraryChange={() => {
+          setLibraryRev((n) => n + 1)
+          void lib.reload()
+        }}
+      />
+      <AccountBookmarkExport revision={libraryRev} onNotify={onNotify} />
       <div className="row wrap">
         <button className="danger" onClick={async () => { if (await confirm(t('confirm_clear'))) { await clearAll(); await lib.reload() } }}>{t('clear_data')}</button>
       </div>

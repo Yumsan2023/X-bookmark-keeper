@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { applyMark, enqueue, freshState, setAuthorFlag, setHidden } from '@/strike/lib/pure.js'
 import { dispatch } from '@/strike/lib/store.js'
 import { pickStrike, type StrikeSlice } from '@/backup/full'
-import { applyRestorePlan, collectFullBackup } from '@/backup/io'
+import { buildAccountLibraryExport } from '@/backup/account-library'
+import { applyRestorePlan, collectAccountLibraryExport, collectFullBackup } from '@/backup/io'
 import { inspectBackup } from '@/backup/full'
 import { db } from '@/db/db'
 import { clearAll } from '@/db/posts'
@@ -245,6 +246,56 @@ describe('full backup replace', () => {
     expect((await db.posts.get('new'))?.note).toBe('from-old-file')
     expect(await db.posts.get('old')).toBeUndefined()
     expect(await db.folders.get('Imported')).toBeTruthy()
+    const handles = Object.values((holder.data.xsl as StrikeSlice).ledger).map((row) => (row as { handle?: string }).handle)
+    expect(handles).toContain('keepme')
+    expect((holder.data.xslSecret as { apiKey: string }).apiKey).toBe(KEEP_STRIKE)
+    expect(holder.data[STORAGE_KEYS.progress]).toBeUndefined()
+  })
+
+  it('merges one account library and leaves the other account and the ledger', async () => {
+    const state = freshState(NOW)
+    applyMark(state, { tag: 'Spam', handle: 'keepme', tweetId: '300', textSnippet: 'x' }, NOW)
+    rememberStrike(state, KEEP_STRIKE)
+    holder.data[STORAGE_KEYS.progress] = { status: 'running' }
+    const shared = post('1', 'local-note')
+    shared.accounts = ['alice', 'bob']
+    shared.tags = ['local']
+    shared.folder = 'LocalOnly'
+    const bobOnly = post('2', 'bob-stays')
+    bobOnly.accounts = ['bob']
+    bobOnly.folder = 'BobFolder'
+    await db.posts.bulkPut([shared, bobOnly])
+    await db.folders.bulkPut([
+      { name: 'LocalOnly', source: 'local', created_at: 1 },
+      { name: 'BobFolder', source: 'local', created_at: 2 },
+    ])
+    await db.searchMeta.put({ key: 'main', dbVersion: 1, postCount: 2, updatedAt: 1, indexJson: { stale: true } })
+
+    const exported = await collectAccountLibraryExport({ account: 'alice' }, NOW)
+    expect(exported?.posts.map((row) => row.tweet_id)).toEqual(['1'])
+    expect(exported?.folders.map((folder) => folder.name)).toEqual(['LocalOnly'])
+    const edited = buildAccountLibraryExport({
+      posts: [{ ...shared, note: 'from-file', tags: ['from-file'], folder: 'Dev', accounts: ['alice'] }],
+      folders: [{ name: 'Dev', source: 'local', created_at: 3 }],
+      account: 'alice',
+      now: NOW,
+    })
+    const plan = inspectBackup(JSON.parse(JSON.stringify(edited)))
+    expect(plan.ok).toBe(true)
+    if (!plan.ok) return
+    expect(plan.plan.mode).toBe('merge')
+    await applyRestorePlan(plan.plan)
+
+    const merged = await db.posts.get('1')
+    expect(merged?.note).toBe('from-file')
+    expect(merged?.folder).toBe('Dev')
+    expect(merged?.tags.sort()).toEqual(['from-file', 'local'])
+    expect([...(merged?.accounts ?? [])].sort()).toEqual(['alice', 'bob'])
+    expect((await db.posts.get('2'))?.note).toBe('bob-stays')
+    expect(await db.folders.get('BobFolder')).toBeTruthy()
+    expect(await db.folders.get('Dev')).toBeTruthy()
+    expect(await db.folders.get('LocalOnly')).toBeTruthy()
+    expect(await db.searchMeta.get('main')).toBeUndefined()
     const handles = Object.values((holder.data.xsl as StrikeSlice).ledger).map((row) => (row as { handle?: string }).handle)
     expect(handles).toContain('keepme')
     expect((holder.data.xslSecret as { apiKey: string }).apiKey).toBe(KEEP_STRIKE)
