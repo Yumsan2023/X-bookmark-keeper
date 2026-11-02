@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { applyRestorePlan, backupFileName, collectFullBackup } from '@/backup/io'
-import { inspectBackupText, serializeBackup, type BackupError, type BackupSummary, type RestorePlan, type SecretName } from '@/backup/full'
+import { backupExceedsSizeLimit, inspectBackupText, serializeBackup, type BackupError, type BackupSummary, type RestorePlan, type SecretName } from '@/backup/full'
 import { saveBlob } from '../util'
 import { useT, type Key } from '../i18n'
 
@@ -60,7 +60,7 @@ export function FullBackupPanel({ onNotify, onLibraryChange }: { onNotify?: (mes
     setPreview(null)
     await new Promise((resolve) => setTimeout(resolve, 0))
     try {
-      if (file.size > 64_000_000) {
+      if (backupExceedsSizeLimit(file.size)) {
         fail('too-large')
         return
       }

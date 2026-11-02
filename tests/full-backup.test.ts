@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest'
 import {
   APP_VERSION,
   FULL_BACKUP_FORMAT,
+  FULL_BACKUP_MAX_BYTES,
+  FULL_BACKUP_MAX_CHARS,
   FULL_BACKUP_VERSION,
+  backupExceedsSizeLimit,
   buildFullBackup,
   inspectBackup,
   inspectBackupText,
@@ -103,7 +106,7 @@ describe('full backup file', () => {
   it('matches the extension version', () => {
     const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }
     const manifest = JSON.parse(readFileSync(new URL('../public/manifest.json', import.meta.url), 'utf8')) as { version: string }
-    expect(APP_VERSION).toBe('0.7.15')
+    expect(APP_VERSION).toBe('0.7.16')
     expect(pkg.version).toBe(APP_VERSION)
     expect(manifest.version).toBe(APP_VERSION)
   })
@@ -201,5 +204,31 @@ describe('full backup file', () => {
     expect(ledger.error).toBe('ledger-only')
     expect(broken.error).toBe('bad-json')
     expect(unknown.error).toBe('bad-file')
+  })
+
+  it('allows a ~115MB restore and still rejects text past the ceiling', () => {
+    expect(FULL_BACKUP_MAX_BYTES).toBe(512 * 1024 * 1024)
+    expect(FULL_BACKUP_MAX_CHARS).toBe(FULL_BACKUP_MAX_BYTES)
+    const legacyClass = 114_600_000
+    expect(legacyClass).toBeLessThan(FULL_BACKUP_MAX_BYTES)
+    expect(backupExceedsSizeLimit(legacyClass)).toBe(false)
+    expect(backupExceedsSizeLimit(FULL_BACKUP_MAX_BYTES)).toBe(false)
+    expect(backupExceedsSizeLimit(FULL_BACKUP_MAX_BYTES + 1)).toBe(true)
+
+    const panel = readFileSync(new URL('../src/ui/components/FullBackupPanel.tsx', import.meta.url), 'utf8')
+    expect(panel).toContain('backupExceedsSizeLimit(file.size)')
+    expect(panel).not.toContain('64_000_000')
+
+    // Real string so the size gate runs before JSON.parse. Invalid JSON is enough:
+    // a shape error is fine; too-large is not.
+    const aroundUserFile = inspectBackupText('x'.repeat(legacyClass))
+    expect(aroundUserFile).toEqual({ ok: false, error: 'bad-json' })
+
+    // One past the ceiling returns before parse. Avoid allocating 512 MiB.
+    const over = inspectBackupText({ length: FULL_BACKUP_MAX_BYTES + 1 } as unknown as string)
+    expect(over).toEqual({ ok: false, error: 'too-large' })
+    const atCeiling = inspectBackupText({ length: FULL_BACKUP_MAX_BYTES } as unknown as string)
+    expect(atCeiling.ok).toBe(false)
+    if (!atCeiling.ok) expect(atCeiling.error).not.toBe('too-large')
   })
 })
