@@ -11,6 +11,65 @@ export function normalizeHandle(value: unknown): string {
     .toLowerCase()
 }
 
+const SCREEN_NAME = /^[a-z0-9_]{1,15}$/
+
+/** X screen name, or '' when the value is not a handle. */
+export function canonicalScreenName(value: unknown): string {
+  const name = normalizeHandle(value)
+  return SCREEN_NAME.test(name) ? name : ''
+}
+
+/**
+ * Account that should own this sync.
+ * A typed or picked handle wins. Otherwise the detected login.
+ */
+export function resolveStampAccount(choice: { override?: unknown; detected?: unknown }): string {
+  return canonicalScreenName(choice.override) || canonicalScreenName(choice.detected)
+}
+
+const PROFILE_RESERVED = new Set([
+  'home',
+  'explore',
+  'search',
+  'notifications',
+  'messages',
+  'settings',
+  'i',
+  'compose',
+  'intent',
+  'share',
+  'hashtag',
+  'login',
+  'signup',
+  'bookmarks',
+])
+
+/** `/alice` or `https://x.com/alice` → `alice`. Reserved site paths are ignored. */
+export function screenNameFromProfileHref(href: unknown): string {
+  const raw = String(href ?? '').trim()
+  if (!raw) return ''
+  let path = raw
+  try {
+    if (/^https?:/i.test(raw)) path = new URL(raw).pathname
+  } catch {
+    return ''
+  }
+  const match = /^\/([A-Za-z0-9_]{1,15})\/?$/.exec(path)
+  if (!match) return ''
+  const name = match[1].toLowerCase()
+  if (PROFILE_RESERVED.has(name)) return ''
+  return name
+}
+
+/** Account-switcher text such as `Name @alice` → `alice`. */
+export function screenNameFromAccountLabel(text: unknown): string {
+  const match = /@([A-Za-z0-9_]{1,15})\b/.exec(String(text ?? ''))
+  if (!match) return ''
+  const name = match[1].toLowerCase()
+  if (PROFILE_RESERVED.has(name)) return ''
+  return name
+}
+
 export function postAccounts(post: { accounts?: string[] } | null | undefined): string[] {
   return Array.isArray(post?.accounts) ? post.accounts : []
 }

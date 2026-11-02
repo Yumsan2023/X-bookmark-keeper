@@ -84,6 +84,8 @@ nav { display:flex; gap:4px; flex:1; }
 .tab.active { background: var(--tab-active-bg); color: var(--tab-active-fg); font-weight: 700; }
 .mini-sync { margin-bottom:8px; } .mini-sync:empty { display:none; }
 .row { display:flex; gap:8px; align-items:center; } .row.wrap { flex-wrap:wrap; } .row.end { justify-content:flex-end; margin-top:12px; }
+.stamp-account { display:flex; flex-direction:column; gap:6px; margin:8px 0; }
+.stamp-account input { min-width:160px; }
 .spacer { flex:1; } .muted { color: var(--muted); font-size: 12.5px; } .ok { color: var(--ok); } .err { color: var(--danger); }
 .searchbar { display:flex; gap:8px; } .searchbar .q { flex:1; padding:8px 12px; font-size:15px; }
 .filters { display:grid; grid-template-columns: repeat(auto-fill,minmax(160px,1fr)); gap:8px; background:var(--card); border:1px solid var(--border); padding:10px; border-radius:8px; margin-top:8px; }

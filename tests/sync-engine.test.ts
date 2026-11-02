@@ -4,7 +4,7 @@ import { padSortIndex } from '@/api/parser'
 import { XApiError } from '@/api/errors'
 import { SyncEngine, type SyncApi } from '@/background/sync-engine'
 import { db } from '@/db/db'
-import { clearAll, moveToFolder, upsertParsed } from '@/db/posts'
+import { clearAll, listBookmarkAccounts, moveToFolder, upsertParsed } from '@/db/posts'
 import { DEFAULT_SETTINGS, type Settings, type SyncProgress } from '@/shared/types'
 import { bookmarksPage, cursorEntry, folderTimelinePage, foldersResponse, threadResponse, tweet, tweetEntry } from './fixtures/builders'
 
@@ -34,7 +34,11 @@ function fakeApi(pages: string[][], opts: { onCall?: (cursor?: string) => void; 
   return { api, calls }
 }
 
-function mkEngine(api: Partial<SyncApi>, settings: Partial<Settings> = {}, extra: { progress?: { v?: SyncProgress }; sleeps?: number[] } = {}) {
+function mkEngine(
+  api: Partial<SyncApi>,
+  settings: Partial<Settings> = {},
+  extra: { progress?: { v?: SyncProgress }; sleeps?: number[]; knownAccounts?: () => Promise<string[]> } = {},
+) {
   const store = extra.progress ?? {}
   const history: SyncProgress[] = []
   const engine = new SyncEngine({
@@ -51,6 +55,7 @@ function mkEngine(api: Partial<SyncApi>, settings: Partial<Settings> = {}, extra
       store.v = p
       history.push(p)
     },
+    knownAccounts: extra.knownAccounts,
     sleep: async (ms) => {
       extra.sleeps?.push(ms)
     },
@@ -254,6 +259,73 @@ describe('SyncEngine', () => {
     await m.engine.start('full') // 第二次调用被忽略, 不会并发跑第二个循环
     expect((await a).status).toBe('done')
     expect(calls).toEqual([undefined, 'c1', 'c_end'])
+  })
+
+  it('stamps an explicit account even when login detection is absent', async () => {
+    const p = await mkEngine(fakeApi([['10', '9']]).api).engine.start('full', { account: '@Alice' })
+    expect(p.account).toBe('alice')
+    expect((await db.posts.get('10'))!.accounts).toEqual(['alice'])
+    expect((await db.posts.get('9'))!.accounts).toEqual(['alice'])
+    await mkEngine(fakeApi([['11', '10']]).api).engine.start('incremental', { account: 'alice' })
+    expect((await db.posts.get('11'))!.accounts).toEqual(['alice'])
+    expect((await db.posts.get('10'))!.status).toBe('active')
+  })
+
+  it('manual override wins over the detected login and does not keep the other user id', async () => {
+    const { api } = fakeApi([['10']])
+    const p = await mkEngine({
+      ...api,
+      getAccount: async () => ({ screen_name: 'Alice', user_id: '111' }),
+    }).engine.start('full', { account: '@Bob' })
+    expect(p).toMatchObject({ status: 'done', account: 'bob' })
+    expect(p.account_id).toBeUndefined()
+    expect((await db.posts.get('10'))!.accounts).toEqual(['bob'])
+  })
+
+  it('syncing account A does not unbookmark posts that only account B still has', async () => {
+    await mkEngine(fakeApi([['a1', 'shared', 'gone']]).api).engine.start('full', { account: 'alice' })
+    await mkEngine(fakeApi([['b1', 'shared']]).api).engine.start('full', { account: 'bob' })
+    const p = await mkEngine(fakeApi([['a1', 'shared']]).api).engine.start('full', { account: 'alice' })
+    expect(p.status).toBe('done')
+    expect((await db.posts.get('b1'))).toMatchObject({ status: 'active', accounts: ['bob'] })
+    expect((await db.posts.get('shared'))).toMatchObject({ status: 'active', accounts: ['alice', 'bob'] })
+    expect((await db.posts.get('a1'))).toMatchObject({ status: 'active', accounts: ['alice'] })
+    expect((await db.posts.get('gone'))).toMatchObject({ status: 'unbookmarked', accounts: [] })
+    expect((await listBookmarkAccounts()).map((row) => row.account).sort()).toEqual(['alice', 'bob'])
+  })
+
+  it('a failed login detection does not mass-mark a blank library as unbookmarked', async () => {
+    await mkEngine(fakeApi([['1', '2', '3']]).api).engine.start('full')
+    const { api } = fakeApi([['1']])
+    const p = await mkEngine({
+      ...api,
+      getAccount: async () => {
+        throw new Error('settings down')
+      },
+    }).engine.start('full')
+    expect(p.status).toBe('done')
+    expect((await db.posts.get('2'))!.status).toBe('active')
+    expect((await db.posts.get('3'))!.status).toBe('active')
+    expect((await db.posts.get('2'))!.accounts).toEqual([])
+  })
+
+  it('does not mass-mark blank bookmarks when another account is already known', async () => {
+    await mkEngine(fakeApi([['1', '2', '3']]).api).engine.start('full')
+    const p = await mkEngine(fakeApi([['1']]).api, {}, { knownAccounts: async () => ['alice'] }).engine.start('full')
+    expect(p.status).toBe('done')
+    expect((await db.posts.get('2'))!.status).toBe('active')
+    expect((await db.posts.get('3'))!.accounts).toEqual([])
+  })
+
+  it('re-seeing a mis-marked bookmark on a full sync reactivates it and stamps the account', async () => {
+    await mkEngine(fakeApi([['10', '9']]).api).engine.start('full')
+    await db.posts.update('10', { status: 'unbookmarked', deleted_at: 1, accounts: [] })
+    await mkEngine(fakeApi([['10', '9']]).api).engine.start('full', { account: 'alice' })
+    const row = (await db.posts.get('10'))!
+    expect(row.status).toBe('active')
+    expect(row.accounts).toEqual(['alice'])
+    expect(row.deleted_at).toBeUndefined()
+    expect((await db.posts.get('9'))).toMatchObject({ status: 'active', accounts: ['alice'] })
   })
 
   it('upsertParsed integration: resurrected posts are treated as new for incremental stop', async () => {

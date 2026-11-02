@@ -216,9 +216,9 @@ export const DEFAULT_SETTINGS: Settings = {
 
 // ---------------- 消息 ----------------
 export type BgRequest =
-  | { type: 'sync/start'; mode: SyncMode }
+  | { type: 'sync/start'; mode: SyncMode; account?: string }
   | { type: 'sync/pause' }
-  | { type: 'sync/resume' }
+  | { type: 'sync/resume'; account?: string }
   | { type: 'sync/cancel' }
   | { type: 'sync/status' }
   | { type: 'timeline/start'; handle: string }
@@ -258,6 +258,8 @@ export const STORAGE_KEYS = {
   libraryColumns: 'bk_library_columns',
   /** screen_name → { user_id?, last_seen_at } for bookmark accounts. Not strike data. */
   accounts: 'bk_accounts',
+  /** Last handle the user confirmed for bookmark stamps (lowercase, no @). */
+  stampAccount: 'bk_stamp_account',
 } as const
 
 /** 时间线帖子的本地文件夹前缀, 形如 timeline:@alice */

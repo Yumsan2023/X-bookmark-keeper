@@ -8,6 +8,7 @@ import {
   upsertFolder,
   upsertParsed,
 } from '@/db/posts'
+import { canonicalScreenName, resolveStampAccount } from '@/shared/accounts'
 import type { Settings, SyncMode, SyncProgress } from '@/shared/types'
 
 /** 同步引擎依赖 (全部可注入, 便于测试) */
@@ -30,6 +31,8 @@ export interface SyncDeps {
   onFullSyncDone?(meta: { at: number; syncedInRun: number; run_id: string; mode: SyncMode; pendingReport?: boolean }): Promise<void> | void
   /** 限流等待期间的兜底唤醒 (alarms) */
   scheduleWake?(at: number): void
+  /** Handles already recorded for bookmark stamps. Used to refuse a blank-account mass unbookmark. */
+  knownAccounts?(): Promise<string[]>
   sleep?(ms: number): Promise<void>
   random?(): number
   now?(): number
@@ -151,7 +154,7 @@ export class SyncEngine {
     }
   }
 
-  async start(mode: SyncMode): Promise<SyncProgress> {
+  async start(mode: SyncMode, opts?: { account?: string }): Promise<SyncProgress> {
     if (this.running) return this.prog // 已在运行: 忽略重复调用, 返回当前进度
     this.running = true
     this.pauseRequested = false
@@ -159,16 +162,26 @@ export class SyncEngine {
     const settings = await this.deps.getSettings()
     const saved = await this.deps.loadProgress()
     const now = this.now()
-    let current: { screen_name: string; user_id?: string } | undefined
-    try {
-      const got = await this.deps.api.getAccount?.()
-      if (got?.screen_name) current = { ...got, screen_name: got.screen_name.replace(/^@/, '').toLowerCase() }
-    } catch {
-      current = undefined
+    // 检测失败不能让这次同步变成「没有账号」的整库取消标记。用户手填的账号优先于检测结果。
+    let detectionFailed = false
+    let detected: { screen_name: string; user_id?: string } | undefined
+    if (this.deps.api.getAccount) {
+      try {
+        const got = await this.deps.api.getAccount()
+        const screen_name = canonicalScreenName(got?.screen_name)
+        if (screen_name) detected = { screen_name, user_id: got?.user_id }
+        else detectionFailed = true
+      } catch {
+        detectionFailed = true
+      }
     }
+    const chosen = resolveStampAccount({ override: opts?.account, detected: detected?.screen_name })
+    const accountId = chosen && detected?.screen_name === chosen ? detected.user_id : undefined
     let canResume = !!(mode === 'resume' && saved && saved.mode === 'full' && saved.status !== 'done' && saved.status !== 'idle')
-    const switched = !!(canResume && saved?.account && current && saved.account !== current.screen_name)
-    if (switched) canResume = false
+    const switched = !!(canResume && saved?.account && chosen && saved.account !== chosen)
+    // 旧的断点没有账号。现在知道账号了就从头全量, 才能给整库打上标记。
+    const stampUpgrade = !!(canResume && chosen && !saved?.account)
+    if (switched || stampUpgrade) canResume = false
     if (canResume && saved) {
       this.prog = {
         ...saved,
@@ -178,18 +191,22 @@ export class SyncEngine {
         wait_until: undefined,
         message: '从断点继续',
         updated_at: now,
-        account: saved.account ?? current?.screen_name,
-        account_id: saved.account_id ?? current?.user_id,
+        account: saved.account ?? chosen,
+        account_id: saved.account_id ?? accountId,
       }
     } else {
       this.prog = {
         status: 'running',
         phase: 'bookmarks',
-        mode: switched ? 'full' : mode === 'resume' ? 'incremental' : mode,
+        mode: switched || stampUpgrade ? 'full' : mode === 'resume' ? 'incremental' : mode,
         kind: 'bookmark',
-        account: current?.screen_name,
-        account_id: current?.user_id,
-        message: switched ? `检测到已切换账号 @${current?.screen_name}, 重新全量同步` : undefined,
+        account: chosen || undefined,
+        account_id: accountId,
+        message: switched
+          ? `检测到已切换账号 @${chosen}, 重新全量同步`
+          : stampUpgrade
+            ? `按 @${chosen} 重新全量同步，给书签标上收藏账号`
+            : undefined,
         run_id: (this.deps.newRunId ?? (() => `${now.toString(36)}${Math.random().toString(36).slice(2, 8)}`))(),
         started_at: now,
         updated_at: now,
@@ -211,7 +228,7 @@ export class SyncEngine {
         await this.syncFolders(settings)
       }
       if (settings.fetchThreads) await this.syncThreads(settings)
-      if (this.prog.mode === 'full' && settings.detectDeleted) await this.detectRemoved()
+      if (this.prog.mode === 'full' && settings.detectDeleted) await this.detectRemoved(detectionFailed)
       await this.save({ status: 'done', phase: 'done', cursor: undefined, message: '同步完成' })
       if (this.prog.mode === 'full') {
         await this.deps.onFullSyncDone?.({
@@ -342,9 +359,17 @@ export class SyncEngine {
   }
 
   // ---------------- 阶段 4: 检测被移除的书签 ----------------
-  private async detectRemoved() {
+  private async detectRemoved(detectionFailed: boolean) {
     await this.save({ phase: 'detect', message: '检测已取消的书签…' })
-    const n = await markUnbookmarkedNotSeen(this.prog.run_id, this.seenInBookmarks, this.prog.account)
+    let expectAccount = false
+    if (!this.prog.account) {
+      if (detectionFailed) expectAccount = true
+      else {
+        const known = (await this.deps.knownAccounts?.()) ?? []
+        expectAccount = known.some((name) => canonicalScreenName(name))
+      }
+    }
+    const n = await markUnbookmarkedNotSeen(this.prog.run_id, this.seenInBookmarks, this.prog.account, { expectAccount })
     if (n === -1) await this.save({ message: '已抓取数量异常偏少, 跳过"已取消书签"检测' })
     else if (n === -2) await this.save({ message: '无法确认当前登录账号, 跳过"已取消书签"检测' })
     else await this.save({ message: n ? `标记 ${n} 条已取消书签 (本地保留)` : undefined })

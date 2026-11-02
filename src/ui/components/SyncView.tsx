@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { OperationName } from '@/api/endpoints'
+import { canonicalScreenName, resolveStampAccount } from '@/shared/accounts'
 import type { SyncProgress } from '@/shared/types'
 import { bg, useAuthInfo, useProgress, useRate, useTask, useTimelineProgress } from '../hooks'
 import { useT, type Key } from '../i18n'
+import { readKnownAccounts, readStampAccount, saveStampAccount } from '../stamp-account'
 import { useDialogs } from './Dialogs'
 
 export function errorHint(p: SyncProgress | undefined): Key | null {
@@ -22,14 +24,129 @@ export function SyncControls(_props: { compact?: boolean }) {
   const status = p?.status ?? 'idle'
   const active = status === 'running' || status === 'waiting'
   const resumable = !!p && ['paused', 'error', 'cancelled'].includes(status) && p.mode === 'full' && !!p.cursor
+  const [handle, setHandle] = useState('')
+  const [detected, setDetected] = useState('')
+  const [detectError, setDetectError] = useState('')
+  const [known, setKnown] = useState<string[]>([])
+  const [ready, setReady] = useState(false)
+  const [detecting, setDetecting] = useState(false)
+  const [localError, setLocalError] = useState('')
+
+  const refresh = useCallback(async () => {
+    setDetecting(true)
+    const [saved, accounts] = await Promise.all([readStampAccount(), readKnownAccounts()])
+    setKnown(accounts)
+    setHandle((cur) => cur || saved)
+    const r = await bg<{ screen_name: string }>({ type: 'account/current' })
+    if (r.ok && r.data?.screen_name) {
+      const name = canonicalScreenName(r.data.screen_name)
+      setDetected(name)
+      setDetectError('')
+      setHandle((cur) => cur || saved || name)
+    } else {
+      setDetected('')
+      setDetectError(r.error || '')
+    }
+    setDetecting(false)
+    setReady(true)
+  }, [])
+
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  const chosen = resolveStampAccount({ override: handle })
+  const mismatch = !!(detected && chosen && chosen !== detected)
+
+  async function start(mode: 'incremental' | 'full') {
+    if (handle.trim() && !canonicalScreenName(handle)) {
+      setLocalError(t('stamp_invalid'))
+      return
+    }
+    // The field is the confirmation. Detection only fills it; clearing it must not silently stamp the detected login.
+    const account = resolveStampAccount({ override: handle })
+    if (!account) {
+      setLocalError(t('stamp_missing'))
+      return
+    }
+    setLocalError('')
+    if (mode === 'full' && !(await confirm(t('full_sync_warn')))) return
+    await saveStampAccount(account)
+    setHandle(account)
+    await bg({ type: 'sync/start', mode, account })
+  }
+
+  async function resume() {
+    const account = resolveStampAccount({ override: handle })
+    if (account) {
+      await saveStampAccount(account)
+      setHandle(account)
+    }
+    await bg({ type: 'sync/resume', ...(account ? { account } : {}) })
+  }
+
   return (
-    <div className="row wrap">
-      {!active && <button className="primary" onClick={() => bg({ type: 'sync/start', mode: 'incremental' })}>{t('sync_incremental')}</button>}
-      {!active && <button onClick={async () => { if (await confirm(t('full_sync_warn'))) bg({ type: 'sync/start', mode: 'full' }) }}>{t('sync_full')}</button>}
-      {!active && resumable && status !== 'paused' && <button onClick={() => bg({ type: 'sync/resume' })}>{t('sync_resume')}</button>}
-      {active && <button onClick={() => bg({ type: 'sync/pause' })}>{t('pause')}</button>}
-      {status === 'paused' && <button className="primary" onClick={() => bg({ type: 'sync/resume' })}>{t('resume')}</button>}
-      {(active || status === 'paused') && <button className="danger" onClick={() => bg({ type: 'sync/cancel' })}>{t('cancel')}</button>}
+    <div>
+      <div className="stamp-account">
+        <span>{t('stamp_account')}</span>
+        <div className="row wrap">
+          <input
+            aria-label={t('stamp_account')}
+            placeholder="@handle"
+            value={handle}
+            disabled={active}
+            onChange={(e) => {
+              setHandle(e.target.value)
+              setLocalError('')
+            }}
+            onBlur={() => {
+              const name = canonicalScreenName(handle)
+              if (name) setHandle(name)
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !active) void start('incremental')
+            }}
+          />
+          {known.length > 0 && (
+            <select
+              aria-label={t('stamp_pick')}
+              value={known.includes(chosen) ? chosen : ''}
+              disabled={active}
+              onChange={(e) => {
+                if (e.target.value) setHandle(e.target.value)
+                setLocalError('')
+              }}
+            >
+              <option value="">{t('stamp_pick')}</option>
+              {known.map((account) => (
+                <option key={account} value={account}>@{account}</option>
+              ))}
+            </select>
+          )}
+          {detected && chosen !== detected && (
+            <button type="button" disabled={active} onClick={() => { setHandle(detected); setLocalError('') }}>{t('stamp_use_detected')}</button>
+          )}
+          <button type="button" disabled={active || detecting} onClick={() => void refresh()}>{t('stamp_redetect')}</button>
+        </div>
+        {!ready || detecting ? (
+          <span className="muted">{t('stamp_detecting')}</span>
+        ) : detected ? (
+          <span className="ok">{t('stamp_detected', { acct: detected })}</span>
+        ) : (
+          <span className="err">{t('stamp_detect_fail')}{detectError ? ` (${detectError})` : ''}</span>
+        )}
+        {mismatch && <span className="warn-line">{t('stamp_mismatch', { detected, chosen })}</span>}
+        <span className="muted">{t('stamp_hint')}</span>
+        {localError && <span className="err">{localError}</span>}
+      </div>
+      <div className="row wrap">
+        {!active && <button className="primary" onClick={() => void start('incremental')}>{t('sync_incremental')}</button>}
+        {!active && <button onClick={() => void start('full')}>{t('sync_full')}</button>}
+        {!active && resumable && status !== 'paused' && <button onClick={() => void resume()}>{t('sync_resume')}</button>}
+        {active && <button onClick={() => bg({ type: 'sync/pause' })}>{t('pause')}</button>}
+        {status === 'paused' && <button className="primary" onClick={() => void resume()}>{t('resume')}</button>}
+        {(active || status === 'paused') && <button className="danger" onClick={() => bg({ type: 'sync/cancel' })}>{t('cancel')}</button>}
+      </div>
     </div>
   )
 }
@@ -50,7 +167,7 @@ function ProgressBlock({ p, label }: { p: SyncProgress | undefined; label?: stri
       {label && <div className="muted">{label}</div>}
       <div className="row wrap">
         <b>{t(p.status as Key)}</b>
-        <span className="muted">{t('phase')}: {phaseLabel}{p.folder ? ` (${p.folder})` : ''}{p.handle ? ` @${p.handle}` : ''}</span>
+        <span className="muted">{t('phase')}: {phaseLabel}{p.folder ? ` (${p.folder})` : ''}{p.handle ? ` @${p.handle}` : ''}{p.account ? ` · ${t('stamp_account')} @${p.account}` : ''}</span>
         <span className="muted">{t('pages')} {p.pages} · {t('fetched')} {p.fetched} · {t('added')} {p.added} · {t('updated')} {p.updated}</span>
       </div>
       {(p.status === 'running' || p.status === 'waiting') && <progress />}

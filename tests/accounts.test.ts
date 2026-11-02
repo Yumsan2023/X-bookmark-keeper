@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { parseTimelinePage, type ParsedPost } from '@/api/parser'
 import { clearAll, markUnbookmarkedNotSeen, releaseBookmark, upsertParsed } from '@/db/posts'
 import { bookmarksPage, tweet, tweetEntry } from './fixtures/builders'
-import { decideDelete, partitionDeletes, twidFromCookie } from '@/shared/accounts'
+import { decideDelete, partitionDeletes, resolveStampAccount, screenNameFromAccountLabel, screenNameFromProfileHref, twidFromCookie } from '@/shared/accounts'
 
 function parsed(ids: string[]): ParsedPost[] {
   return parseTimelinePage(bookmarksPage(ids.map((id, i) => tweetEntry(tweet({ id, text: `t${id}` }), String(9000 - i))))).entries.map((e) => (e as { post: ParsedPost }).post)
@@ -14,6 +14,17 @@ beforeEach(async () => {
 })
 
 describe('bookmark accounts', () => {
+  it('resolves a stamp account: override wins, @ is stripped, bad handles are dropped', () => {
+    expect(resolveStampAccount({ override: '@Bob', detected: 'alice' })).toBe('bob')
+    expect(resolveStampAccount({ detected: 'Alice' })).toBe('alice')
+    expect(resolveStampAccount({ override: 'not a handle', detected: 'alice' })).toBe('alice')
+    expect(resolveStampAccount({})).toBe('')
+    expect(screenNameFromProfileHref('https://x.com/Alice')).toBe('alice')
+    expect(screenNameFromProfileHref('/home')).toBe('')
+    expect(screenNameFromProfileHref('/i/bookmarks')).toBe('')
+    expect(screenNameFromAccountLabel('Ada\n@Ada_Lovelace')).toBe('ada_lovelace')
+  })
+
   it('reads twid from a cookie header', () => {
     expect(twidFromCookie('guest_id=1; twid=u%3D42; other=1')).toBe('42')
     expect(twidFromCookie('twid="99"')).toBe('99')
@@ -44,6 +55,27 @@ describe('bookmark accounts', () => {
     })
     expect(decideDelete({ accounts: ['alice', 'bob'] }, 'alice', true)).toEqual({ kind: 'keep', accounts: ['bob'] })
     expect(decideDelete({ accounts: ['alice'] }, 'alice', true)).toEqual({ kind: 'remove' })
+  })
+
+  it('does not unbookmark blank or other-account posts when this run has an owner', async () => {
+    await upsertParsed(parsed(['1']), 'old')
+    await upsertParsed(parsed(['2']), 'old', { account: 'bob' })
+    await upsertParsed(parsed(['3']), 'old', { account: 'alice' })
+    expect(await markUnbookmarkedNotSeen('new', 1, 'alice')).toBe(1)
+    const blank = (await (await import('@/db/db')).db.posts.get('1'))!
+    expect(blank.status).toBe('active')
+    expect(blank.accounts).toEqual([])
+    expect((await (await import('@/db/db')).db.posts.get('2'))).toMatchObject({ status: 'active', accounts: ['bob'] })
+    const removed = (await (await import('@/db/db')).db.posts.get('3'))!
+    expect(removed.status).toBe('unbookmarked')
+    expect(removed.accounts).toEqual([])
+  })
+
+  it('does not mass-mark blank accounts when an owning account is expected', async () => {
+    await upsertParsed(parsed(['1', '2']), 'old')
+    expect(await markUnbookmarkedNotSeen('new', 0, undefined, { expectAccount: true })).toBe(-2)
+    expect((await (await import('@/db/db')).db.posts.get('1'))!.status).toBe('active')
+    expect((await (await import('@/db/db')).db.posts.get('2'))!.status).toBe('active')
   })
 
   it('does not mass-unbookmark when the library has account stamps but this run has no account', async () => {

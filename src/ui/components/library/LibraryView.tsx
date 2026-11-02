@@ -17,6 +17,7 @@ import {
   type Settings,
 } from '@/shared/types'
 import { bg, useAuthorMarks, type Library } from '../../hooks'
+import { resolveLibrarySyncAccount } from '../../stamp-account'
 import { useLang, useT, type Key } from '../../i18n'
 import { fmtDate, fmtNum } from '../../util'
 import { AiDialog } from '../AiDialog'
@@ -189,6 +190,23 @@ export function LibraryView({
     setTimeout(() => setInfo(''), 6000)
   }
 
+  const startIncremental = async () => {
+    const { account, conflict } = await resolveLibrarySyncAccount()
+    if (conflict) {
+      flash(t('stamp_conflict', conflict))
+      onSync?.()
+      return
+    }
+    if (!account) {
+      flash(t('stamp_missing'))
+      onSync?.()
+      return
+    }
+    void bg({ type: 'sync/start', mode: 'incremental', account })
+    onSync?.()
+    flash(t('running'))
+  }
+
   const aiVisible = llmConfigured(settings.llm)
   const selectedPosts = () => [...selectedCache.values()].filter((p) => selected.has(p.tweet_id))
   const openAi = async (scope: 'selected' | 'untagged') => {
@@ -321,11 +339,7 @@ export function LibraryView({
             type="button"
             className="lib-tool"
             title={t('sync_incremental')}
-            onClick={() => {
-              void bg({ type: 'sync/start', mode: 'incremental' })
-              onSync?.()
-              flash(t('running'))
-            }}
+            onClick={() => void startIncremental()}
           >
             ↻
           </button>
@@ -539,10 +553,7 @@ export function LibraryView({
                     <button
                       type="button"
                       className="lib-btn primary"
-                      onClick={() => {
-                        void bg({ type: 'sync/start', mode: 'incremental' })
-                        onSync?.()
-                      }}
+                      onClick={() => void startIncremental()}
                     >
                       ↻ {t('go_sync')}
                     </button>
