@@ -61,4 +61,12 @@ describe('strike ledger pure logic', () => {
     expect(sanitized.settings.enablePlatformActions).toBe(true)
     expect(sanitized.settings.blockOnThreshold).toBe(true)
   })
+
+  it('shows the Mark bar by default, and sanitize keeps a Mark bar choice', () => {
+    expect(defaultSettings().markBarEnabled).toBe(true)
+    const off = sanitizeSettings(defaultSettings(), { markBarEnabled: false })
+    expect(off.settings.markBarEnabled).toBe(false)
+    const bad = sanitizeSettings(defaultSettings(), { markBarEnabled: 'yes' })
+    expect(bad.settings.markBarEnabled).toBe(true)
+  })
 })

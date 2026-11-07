@@ -489,6 +489,12 @@ export function defaultSettings() {
      */
     hoverCardEnabled: true,
     /**
+     * Per-tweet Mark bar. Display only the entry point to the Mark sheet.
+     * Off hides the bar (and its suspect/AI chips) so tweets keep X's layout;
+     * striking still works via the Alt+T picker / Alt+S / Alt+M shortcuts.
+     */
+    markBarEnabled: true,
+    /**
      * Read-only UserTweets sample for the paid-partnership ratio.
      * Off by default so a hover does not spend the shared timeline rate limit.
      */
@@ -2493,7 +2499,7 @@ export function sanitizeSettings(prev, patch) {
   if (src.language === "auto" || src.language === "zh" || src.language === "en") base.language = src.language;
   if (src.defaultThreshold != null) base.defaultThreshold = clampInt(src.defaultThreshold, 1, 99, base.defaultThreshold);
   if (src.actionMode === "auto" || src.actionMode === "confirm" || src.actionMode === "prompt-only") base.actionMode = src.actionMode;
-  for (const key of ["hideOnThreshold", "muteOnThreshold", "blockOnThreshold", "enablePlatformActions", "rulesEnabled", "hitHistory", "commentScanEnabled", "foldReasonEnabled", "communityListsEnabled", "hoverCardEnabled", "partnershipRatioEnabled"]) {
+  for (const key of ["hideOnThreshold", "muteOnThreshold", "blockOnThreshold", "enablePlatformActions", "rulesEnabled", "hitHistory", "commentScanEnabled", "foldReasonEnabled", "communityListsEnabled", "hoverCardEnabled", "partnershipRatioEnabled", "markBarEnabled"]) {
     if (typeof src[key] === "boolean") base[key] = src[key];
   }
   if (src.commentHitMode === "fold" || src.commentHitMode === "prompt") base.commentHitMode = src.commentHitMode;
