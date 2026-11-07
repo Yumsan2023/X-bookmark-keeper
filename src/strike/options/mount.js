@@ -76,6 +76,7 @@ export async function mountStrikeOptions(root) {
     $("#commentScanEnabled").checked = !!draft.commentScanEnabled;
     $("#foldReasonEnabled").checked = draft.foldReasonEnabled !== false;
     $("#hoverCardEnabled").checked = draft.hoverCardEnabled !== false;
+    $("#markBarEnabled").checked = draft.markBarEnabled !== false;
     $("#partnershipRatioEnabled").checked = draft.partnershipRatioEnabled === true;
     $("#communityListsEnabled").checked = draft.communityListsEnabled === true;
     const communityMode = draft.communityListMode === "fold" ? "fold" : "yellow";
@@ -653,6 +654,7 @@ export async function mountStrikeOptions(root) {
     draft.commentScanEnabled = $("#commentScanEnabled").checked;
     draft.foldReasonEnabled = $("#foldReasonEnabled").checked;
     draft.hoverCardEnabled = $("#hoverCardEnabled").checked;
+    draft.markBarEnabled = $("#markBarEnabled").checked;
     draft.partnershipRatioEnabled = $("#partnershipRatioEnabled").checked;
     draft.communityListsEnabled = $("#communityListsEnabled").checked;
     draft.communityListMode = root.querySelector('input[name="communityListMode"]:checked')?.value === "fold" ? "fold" : "yellow";

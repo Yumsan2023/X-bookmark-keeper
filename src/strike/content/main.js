@@ -90,6 +90,9 @@ function applySnapshot(next) {
   if ((snapshot?.hitLog?.length || 0) < prevHits) reportedHits.clear();
   lang = resolveLang(snapshot?.settings?.language, navigator.language);
   if (snapshot?.settings?.hoverCardEnabled === false) dismissHover();
+  if (snapshot?.settings?.markBarEnabled === false) {
+    document.querySelectorAll("[data-xsl-host]").forEach((node) => node.remove());
+  }
   scan();
 }
 
@@ -972,8 +975,12 @@ async function confirmAi(article) {
 }
 
 function render(article, meta) {
+  const markBarEnabled = snapshot?.settings?.markBarEnabled !== false;
   let host = article.querySelector(":scope > [data-xsl-host]");
-  if (!host) {
+  if (!markBarEnabled) {
+    host?.remove();
+    host = null;
+  } else if (!host) {
     host = document.createElement("div");
     host.dataset.xslHost = "1";
     const anchor = [...article.querySelectorAll('[role="group"]')].find((node) => !node.closest('[data-testid="quoteTweet"]'));
@@ -1016,13 +1023,15 @@ function render(article, meta) {
     } : null,
     askAi: settings?.ai?.enabled && !ai?.ok ? t("aiSuggest") : "",
   };
-  mountBar(host, model, {
-    onPicker: () => openTags(article),
-    onChip: () => openTags(article),
-    onSuspect: () => confirmRule(article),
-    onAi: () => confirmAi(article),
-    onAsk: () => askAi(meta),
-  });
+  if (markBarEnabled && host) {
+    mountBar(host, model, {
+      onPicker: () => openTags(article),
+      onChip: () => openTags(article),
+      onSuspect: () => confirmRule(article),
+      onAi: () => confirmAi(article),
+      onAsk: () => askAi(meta),
+    });
+  }
   syncNameHost(article, chrome);
   if (chrome.outline) article.dataset.xslOutline = chrome.outline;
   else delete article.dataset.xslOutline;
