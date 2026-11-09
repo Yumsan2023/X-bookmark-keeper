@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import {
   applyMark,
+  BUILTIN_TAGS,
+  canonicalTag,
   defaultSettings,
   exportData,
   freshState,
   matchMenuLabel,
   matchRules,
   sanitizeSettings,
+  tagLabel,
+  thresholdFor,
 } from '@/strike/lib/pure.js'
 
 const mark = (state: ReturnType<typeof freshState>, tweetId: string, handle = 'spammer') =>
@@ -68,5 +72,37 @@ describe('strike ledger pure logic', () => {
     expect(off.settings.markBarEnabled).toBe(false)
     const bad = sanitizeSettings(defaultSettings(), { markBarEnabled: 'yes' })
     expect(bad.settings.markBarEnabled).toBe(true)
+  })
+
+  it('offers Vagueposting as a built-in tag with threshold 3 and an Alt+V shortcut', () => {
+    expect(BUILTIN_TAGS).toContain('Vagueposting')
+    expect(canonicalTag('vagueposting')).toBe('Vagueposting')
+    expect(canonicalTag('含糊发帖')).toBe('Vagueposting')
+    expect(tagLabel('Vagueposting', 'zh')).toBe('含糊发帖')
+    expect(tagLabel('Vagueposting', 'en')).toBe('Vagueposting')
+    const settings = defaultSettings()
+    expect(settings.tagThresholds.Vagueposting).toBe(3)
+    expect(thresholdFor(settings, 'Vagueposting')).toBe(3)
+    expect(settings.shortcuts.vagueposting).toBe('Alt+V')
+    const kept = sanitizeSettings(defaultSettings(), { tagThresholds: { Vagueposting: 5 } })
+    expect(kept.settings.tagThresholds.Vagueposting).toBe(5)
+  })
+
+  it('reaches the mute/block threshold after three Vagueposting strikes, like Spam and Marketing', () => {
+    const state = freshState(1)
+    state.settings.enablePlatformActions = true
+    state.settings.muteOnThreshold = true
+    const now = 1_700_000_000_000
+    let last
+    for (let i = 0; i < 3; i++) {
+      last = applyMark(state, { tag: 'Vagueposting', handle: 'vagueposter', tweetId: `t${i}`, textSnippet: '...', followed: false }, now + i)
+    }
+    expect(last?.ok).toBe(true)
+    expect(last?.threshold?.count).toBe(3)
+    expect(last?.threshold?.n).toBe(3)
+    expect(last?.threshold?.queueReached).toBe(true)
+    expect(last?.threshold?.suggest.mute).toBe(true)
+    const ledger = state.ledger as Record<string, { tags: { name: string; count: number }[] }>
+    expect(ledger['h:vagueposter'].tags.find((row) => row.name === 'Vagueposting')?.count).toBe(3)
   })
 })

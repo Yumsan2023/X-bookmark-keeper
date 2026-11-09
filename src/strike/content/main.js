@@ -658,7 +658,7 @@ async function openTags(article) {
   }
   const record = indexOf(meta.userId);
   const settings = snapshot?.settings || {};
-  const names = ["Spam", "Marketing", ...(settings.customTags || [])];
+  const names = ["Spam", "Marketing", "Vagueposting", ...(settings.customTags || [])];
   const here = new Set(tweetTags(meta.tweetId));
   const chrome = chromeFor(meta, record);
   const action = await withOverlay(() => openPicker(overlay, {
@@ -1012,7 +1012,7 @@ function render(article, meta) {
       ask: !!settings?.ai?.enabled,
     },
     markLabel: t("mark"),
-    shortcutTitle: `${shortcuts.spam || "Alt+S"} · ${shortcuts.marketing || "Alt+M"} · ${shortcuts.picker || "Alt+T"}`,
+    shortcutTitle: `${shortcuts.spam || "Alt+S"} · ${shortcuts.marketing || "Alt+M"} · ${shortcuts.vagueposting || "Alt+V"} · ${shortcuts.picker || "Alt+T"}`,
     suspect: matched ? {
       label: matched.reasons.length > 1 ? t("suspectCount", { count: matched.reasons.length }) : t("suspect"),
       title: suspectTitle.filter(Boolean).join(" · "),
@@ -1107,6 +1107,10 @@ async function onKey(event) {
     stop(event);
     const parsed = meta();
     if (parsed) await markTag(parsed, "Marketing", "shortcut");
+  } else if (eventMatchesShortcut(event, shortcuts.vagueposting)) {
+    stop(event);
+    const parsed = meta();
+    if (parsed) await markTag(parsed, "Vagueposting", "shortcut");
   } else if (eventMatchesShortcut(event, shortcuts.picker)) {
     stop(event);
     await openTags(article);

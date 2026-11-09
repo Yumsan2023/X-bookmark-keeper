@@ -91,6 +91,7 @@ export async function mountStrikeOptions(root) {
     $("#rateLimitMs").value = draft.rateLimitMs;
     $("#shortcut-spam").textContent = draft.shortcuts.spam;
     $("#shortcut-marketing").textContent = draft.shortcuts.marketing;
+    $("#shortcut-vagueposting").textContent = draft.shortcuts.vagueposting;
     $("#shortcut-picker").textContent = draft.shortcuts.picker;
     $("#aiEnabled").checked = !!draft.ai.enabled;
     $("#autoSuggest").checked = !!draft.ai.autoSuggestSuspects;
@@ -110,7 +111,7 @@ export async function mountStrikeOptions(root) {
   function renderThresholds() {
     const root = $("#tag-thresholds");
     root.replaceChildren();
-    const names = ["Spam", "Marketing", ...(draft.customTags || [])];
+    const names = ["Spam", "Marketing", "Vagueposting", ...(draft.customTags || [])];
     for (const name of names) {
       const label = document.createElement("label");
       const span = document.createElement("span");
@@ -124,7 +125,7 @@ export async function mountStrikeOptions(root) {
         draft.tagThresholds[name] = Number(input.value);
       });
       label.append(span, input);
-      if (name !== "Spam" && name !== "Marketing") {
+      if (name !== "Spam" && name !== "Marketing" && name !== "Vagueposting") {
         label.append(button(t("remove"), () => {
           draft.customTags = draft.customTags.filter((tag) => tag !== name);
           if (draft.tagEffects) delete draft.tagEffects[name];
@@ -144,7 +145,7 @@ export async function mountStrikeOptions(root) {
     form.append(button(t("addTag"), () => {
       const name = input.value.trim();
       if (!name) return;
-      if (!draft.customTags.includes(name) && name.toLowerCase() !== "spam" && name.toLowerCase() !== "marketing") {
+      if (!draft.customTags.includes(name) && name.toLowerCase() !== "spam" && name.toLowerCase() !== "marketing" && name.toLowerCase() !== "vagueposting") {
         draft.customTags.push(name);
         draft.tagThresholds[name] = draft.tagThresholds[name] || draft.defaultThreshold;
       }
@@ -161,7 +162,7 @@ export async function mountStrikeOptions(root) {
     if (!box) return;
     box.replaceChildren();
     if (!draft.tagEffects || typeof draft.tagEffects !== "object") draft.tagEffects = {};
-    const names = ["Spam", "Marketing", ...(draft.customTags || [])];
+    const names = ["Spam", "Marketing", "Vagueposting", ...(draft.customTags || [])];
     for (const name of names) {
       const label = document.createElement("label");
       const span = document.createElement("span");

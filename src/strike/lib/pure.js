@@ -46,7 +46,7 @@ export {
 
 export const SCHEMA = 1;
 export const PRODUCT = "x-strike-ledger";
-export const BUILTIN_TAGS = ["Spam", "Marketing"];
+export const BUILTIN_TAGS = ["Spam", "Marketing", "Vagueposting"];
 export const EVIDENCE_CAP = 30;
 export const UNDO_CAP = 50;
 export const LOG_CAP = 80;
@@ -97,6 +97,7 @@ export function canonicalTag(value) {
   if (!raw || /[\u0000-\u001f]/.test(raw)) return "";
   if (/^spam$/i.test(raw)) return "Spam";
   if (/^marketing$/i.test(raw)) return "Marketing";
+  if (/^vagueposting$/i.test(raw) || raw === "含糊发帖") return "Vagueposting";
   if (!/[\p{L}\p{N}]/u.test(raw)) return "";
   return raw;
 }
@@ -108,6 +109,7 @@ export function accountIdFromHandle(handle) {
 export function tagLabel(name, lang) {
   if (name === "Spam") return lang === "zh" ? "垃圾" : "Spam";
   if (name === "Marketing") return lang === "zh" ? "营销" : "Marketing";
+  if (name === "Vagueposting") return lang === "zh" ? "含糊发帖" : "Vagueposting";
   return name;
 }
 
@@ -324,7 +326,7 @@ export function timelineChrome(account, options = {}) {
   }
   const rows = [...merged.entries()].map(([name, count]) => ({ name, count }));
   rows.sort((a, b) => {
-    const rank = (name) => (name === "Spam" ? 0 : name === "Marketing" ? 1 : 2);
+    const rank = (name) => (name === "Spam" ? 0 : name === "Marketing" ? 1 : name === "Vagueposting" ? 2 : 3);
     const byRank = rank(a.name) - rank(b.name);
     if (byRank) return byRank;
     if (b.count !== a.count) return b.count - a.count;
@@ -467,7 +469,7 @@ export function defaultSettings() {
   return {
     language: "auto",
     defaultThreshold: 3,
-    tagThresholds: { Spam: 3, Marketing: 3 },
+    tagThresholds: { Spam: 3, Marketing: 3, Vagueposting: 3 },
     actionMode: "confirm",
     hideOnThreshold: true,
     muteOnThreshold: false,
@@ -491,7 +493,7 @@ export function defaultSettings() {
     /**
      * Per-tweet Mark bar. Display only the entry point to the Mark sheet.
      * Off hides the bar (and its suspect/AI chips) so tweets keep X's layout;
-     * striking still works via the Alt+T picker / Alt+S / Alt+M shortcuts.
+     * striking still works via the Alt+T picker / Alt+S / Alt+M / Alt+V shortcuts.
      */
     markBarEnabled: true,
     /**
@@ -518,6 +520,7 @@ export function defaultSettings() {
     shortcuts: {
       spam: "Alt+S",
       marketing: "Alt+M",
+      vagueposting: "Alt+V",
       picker: "Alt+T",
     },
     customTags: [],
@@ -2537,10 +2540,10 @@ export function sanitizeSettings(prev, patch) {
   const effectSource = src.tagEffects && typeof src.tagEffects === "object" && !Array.isArray(src.tagEffects)
     ? src.tagEffects
     : base.tagEffects;
-  base.tagEffects = sanitizeTagEffects(effectSource, ["Spam", "Marketing", ...(base.customTags || [])]);
+  base.tagEffects = sanitizeTagEffects(effectSource, ["Spam", "Marketing", "Vagueposting", ...(base.customTags || [])]);
   if (src.shortcuts && typeof src.shortcuts === "object") {
     const next = { ...base.shortcuts };
-    for (const slot of ["spam", "marketing", "picker"]) {
+    for (const slot of ["spam", "marketing", "vagueposting", "picker"]) {
       if (src.shortcuts[slot] == null) continue;
       const parsed = parseShortcutString(src.shortcuts[slot]);
       if (!parsed) {
