@@ -223,7 +223,7 @@ describe('comment-area scan', () => {
     state.settings.muteOnThreshold = true
     state.settings.blockOnThreshold = true
     state.settings.defaultThreshold = 1
-    state.settings.tagThresholds = { Spam: 1, Marketing: 1 }
+    state.settings.tagThresholds = { Spam: 1, Marketing: 1, Vagueposting: 1 }
     const marked = applyMark(state, {
       tag: 'Spam',
       handle: 'spammer',
