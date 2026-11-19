@@ -11,6 +11,7 @@
         <a href="#queue-panel" data-i18n="queueDash"></a>
         <a href="#ledger" data-i18n="ledger"></a>
         <a href="#thresholds" data-i18n="thresholds"></a>
+        <a href="#foryou" data-i18n="foryouNav"></a>
         <a href="#rules" data-i18n="rules"></a>
         <a href="#community" data-i18n="communityNav"></a>
         <a href="#shortcuts" data-i18n="shortcuts"></a>
@@ -112,6 +113,71 @@
         <label>
           <span data-i18n="rateLabel"></span>
           <input id="rateLimitMs" type="number" min="1000" max="10000" step="100" />
+        </label>
+      </section>
+
+      <section id="foryou">
+        <h2 data-i18n="foryouTitle"></h2>
+        <div class="risk">
+          <strong data-i18n="foryouRiskTitle"></strong>
+          <p class="hint" data-i18n="foryouRisk"></p>
+        </div>
+        <p class="hint" data-i18n="foryouHelp"></p>
+        <label class="inline"><input id="foryouEnabled" type="checkbox" /> <span data-i18n="foryouEnabled"></span></label>
+        <label class="inline"><input id="foryouShowScoreChip" type="checkbox" /> <span data-i18n="foryouShowScoreChip"></span></label>
+        <label class="inline"><input id="foryouAutoScroll" type="checkbox" /> <span data-i18n="foryouAutoScroll"></span></label>
+        <fieldset>
+          <legend data-i18n="foryouMode"></legend>
+          <label class="inline"><input type="radio" name="foryouMode" value="rule" /> <span data-i18n="foryouModeRule"></span></label>
+          <label class="inline"><input type="radio" name="foryouMode" value="hybrid" disabled /> <span data-i18n="foryouModeHybrid"></span></label>
+          <label class="inline"><input type="radio" name="foryouMode" value="vector" disabled /> <span data-i18n="foryouModeVector"></span></label>
+          <p class="hint" data-i18n="foryouModeNote"></p>
+        </fieldset>
+        <label>
+          <span data-i18n="foryouBookmarkThreshold"></span>
+          <input id="foryouBookmarkThreshold" type="number" min="0.3" max="0.95" step="0.05" />
+        </label>
+        <label>
+          <span data-i18n="foryouHideThreshold"></span>
+          <input id="foryouHideThreshold" type="number" min="0.05" max="0.6" step="0.05" />
+        </label>
+        <label>
+          <span data-i18n="foryouDailyCap"></span>
+          <input id="foryouDailyCap" type="number" min="1" max="500" />
+        </label>
+        <p class="hint" data-i18n="foryouDailyCapHelp"></p>
+        <label>
+          <span data-i18n="foryouMinGapMs"></span>
+          <input id="foryouMinGapMs" type="number" min="1000" max="10000" step="500" />
+        </label>
+        <fieldset>
+          <legend data-i18n="foryouDestination"></legend>
+          <label class="inline"><input type="radio" name="foryouDestination" value="bookmark" /> <span data-i18n="foryouDestBookmark"></span></label>
+          <label class="inline"><input type="radio" name="foryouDestination" value="folder" /> <span data-i18n="foryouDestFolder"></span></label>
+          <label>
+            <span data-i18n="foryouFolderName"></span>
+            <input id="foryouFolder" type="text" spellcheck="false" />
+          </label>
+          <p class="hint" data-i18n="foryouDestNote"></p>
+        </fieldset>
+        <h2 data-i18n="foryouTopicsTitle"></h2>
+        <p class="hint" data-i18n="foryouTopicsHelp"></p>
+        <label>
+          <span data-i18n="foryouTopics"></span>
+          <textarea id="foryouTopics" rows="6" spellcheck="false"></textarea>
+        </label>
+        <div class="row">
+          <button id="foryouImportPresets" type="button" data-i18n="foryouImportPresets"></button>
+          <button id="foryouImportTags" type="button" data-i18n="foryouImportTags"></button>
+        </div>
+        <p class="hint" data-i18n="foryouEmbedNote"></p>
+        <label>
+          <span data-i18n="foryouEmbedEndpoint"></span>
+          <input id="foryouEmbedEndpoint" type="text" disabled spellcheck="false" />
+        </label>
+        <label>
+          <span data-i18n="foryouEmbedModel"></span>
+          <input id="foryouEmbedModel" type="text" disabled spellcheck="false" />
         </label>
       </section>
 

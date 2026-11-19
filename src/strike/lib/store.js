@@ -53,10 +53,15 @@ import {
   snippet,
   statsOf,
   suggestionHash,
+  thresholdFor,
   toPublicSettings,
   undoVeto,
   upsertCommunitySubscription,
 } from "./pure.js";
+
+import { scoreCandidate } from "../../foryou/score.ts";
+import { defaultForYouSettings } from "../../foryou/types.ts";
+import { listTagNames } from "../../db/posts.ts";
 
 const STATE_KEY = "xsl";
 const SECRET_KEY = "xslSecret";
@@ -242,6 +247,53 @@ async function suggest(input) {
   return { ok: true, cached: false, label: parsed.label, reason: parsed.reason, verdict: parsed.verdict, keywords: parsed.keywords || [] };
 }
 
+/**
+ * For You 批量打分（M1：规则版，纯读操作，不写库）。
+ * 调用方（内容脚本）每批最多传 20 条；这里再钳一次。
+ * 上下文由后台组装：话题来自设置，whitelist / Strike veto 来自账本。
+ * Strike veto：作者 Spam / Marketing / Vagueposting 任一达到
+ * libraryChipThreshold（默认 3）→ 强制 hide，永不自动收藏。
+ * M1 未取的画像字段：topAuthors / medianLikes 均为 null（M3 才有），
+ * 所以作者分只有 followed / whitelist，互动分恒为中性 0.5。
+ */
+function scoreForYouBatch(state, items) {
+  const fy = state.settings?.foryou || defaultForYouSettings();
+  const list = Array.isArray(items) ? items.slice(0, 20) : [];
+  const results = [];
+  for (const item of list) {
+    const tweetId = String(item?.tweetId || "").trim().slice(0, 40);
+    const handle = sanitizeHandle(item?.handle);
+    if (!tweetId || !handle) continue;
+    const account = state.ledger?.[`h:${handle.toLowerCase()}`];
+    const whitelist = !!account?.whitelist;
+    let strikeVeto = false;
+    if (account && !whitelist) {
+      for (const tag of ["Spam", "Marketing", "Vagueposting"]) {
+        const count = account.tags?.find((entry) => entry.name === tag)?.count || 0;
+        if (count >= thresholdFor(state.settings, tag)) {
+          strikeVeto = true;
+          break;
+        }
+      }
+    }
+    const likes = Number.isFinite(Number(item?.likes)) ? Number(item.likes) : null;
+    const scored = scoreCandidate(
+      {
+        tweetId,
+        handle,
+        text: String(item?.text || ""),
+        quotedText: String(item?.quotedText || ""),
+        followed: item?.followed === true ? true : item?.followed === false ? false : null,
+        likes,
+      },
+      { topics: fy.topics || [], topAuthors: null, medianLikes: null, whitelist },
+      { mode: fy.mode, bookmarkThreshold: fy.bookmarkThreshold, hideThreshold: fy.hideThreshold, strikeVeto },
+    );
+    results.push({ tweetId, handle, ...scored });
+  }
+  return { ok: true, results };
+}
+
 export function dispatch(message, sender = {}) {
   const type = message?.type;
   if (!type) return Promise.resolve({ ok: false, error: "bad-message" });
@@ -279,6 +331,18 @@ export function dispatch(message, sender = {}) {
           vetoes: Array.isArray(state.vetoes) ? state.vetoes.slice(0, 40) : [],
           undo: describeUndo(state.undo[0]),
         };
+        break;
+      }
+      case "FORYOU_SCORE": {
+        const denied = timelineOrEditor(sender);
+        if (denied) return denied;
+        result = scoreForYouBatch(state, message.items);
+        break;
+      }
+      case "FORYOU_TAGS": {
+        const denied = editorOnly(sender);
+        if (denied) return denied;
+        result = { ok: true, tags: await listTagNames() };
         break;
       }
       case "SEARCH":
@@ -523,7 +587,7 @@ export function dispatch(message, sender = {}) {
       default:
         return { ok: false, error: "unknown" };
     }
-    const reads = new Set(["ENSURE", "GET_PUBLIC", "GET_EDITOR", "SEARCH", "PEEK_UNDO", "STATS"]);
+    const reads = new Set(["ENSURE", "GET_PUBLIC", "GET_EDITOR", "SEARCH", "PEEK_UNDO", "STATS", "FORYOU_SCORE", "FORYOU_TAGS"]);
     const peekChanged = type === "PEEK_ACTION" && result?.changed;
     if (type === "PEEK_ACTION" && !peekChanged) return result;
     const beginWrites = type === "BEGIN_ACTION" && result?.ok === false && (result?.expired || result?.changed);

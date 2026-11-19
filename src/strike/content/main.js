@@ -28,12 +28,17 @@ import {
 } from "../lib/pure.js";
 import { screenNameFromAccountLabel, screenNameFromProfileHref } from "../../shared/accounts.ts";
 import { performPlatformAction } from "./act.js";
+import { foryouTick, resetForYouSeen } from "./foryou.js";
 import { createHoverCard, createOverlay, mountBar, mountInline, openAiSuggest, openChoice, openFalsePositive, openPicker, toast } from "./view.js";
 
 const expanded = new Set();
 const foldToggle = new WeakMap();
 const aiAsked = new Set();
 const aiResults = new Map();
+/** For You 打分结果（tweetId → FORYOU_SCORE 返回项），只做渲染用，不写库。 */
+const foryouDecisions = new Map();
+/** 登录用户自己的 handle（跳过自己的推文）；懒加载，读不到时下次再试。 */
+let foryouSelfHandle = "";
 const seenSent = new Set();
 const reportedHits = new Set();
 let dict = {};
@@ -84,10 +89,39 @@ function describe(article) {
   return parsed;
 }
 
+/** 登录用户自己的 handle（缓存；读不到时下次 tick 再试）。 */
+function getForYouSelfHandle() {
+  if (!foryouSelfHandle) foryouSelfHandle = readLoggedInScreenName() || "";
+  return foryouSelfHandle;
+}
+
+/**
+ * 后台打分结果回来了：记进 foryouDecisions，再扫一遍渲染
+ * （徽章挂进 Mark bar，hide 决策折叠成 For You 折叠条）。
+ * M1 只渲染：decision 为 bookmark 时不做任何事（自动收藏是 M2）。
+ */
+function applyForYouDecisions(results) {
+  let changed = false;
+  for (const result of results || []) {
+    if (!result?.tweetId) continue;
+    const prev = foryouDecisions.get(result.tweetId);
+    if (!prev || prev.final !== result.final || prev.decision !== result.decision) changed = true;
+    foryouDecisions.set(result.tweetId, result);
+  }
+  if (changed) scan();
+}
+
 function applySnapshot(next) {
   const prevHits = snapshot?.hitLog?.length || 0;
+  const prevForyouEnabled = snapshot?.settings?.foryou?.enabled === true;
   snapshot = next || null;
   if ((snapshot?.hitLog?.length || 0) < prevHits) reportedHits.clear();
+  // For You 开关关→开：已看过的推文重新参与打分。
+  if (!prevForyouEnabled && snapshot?.settings?.foryou?.enabled === true) {
+    foryouDecisions.clear();
+    resetForYouSeen();
+  }
+  if (snapshot?.settings?.foryou?.enabled !== true) foryouDecisions.clear();
   lang = resolveLang(snapshot?.settings?.language, navigator.language);
   if (snapshot?.settings?.hoverCardEnabled === false) dismissHover();
   if (snapshot?.settings?.markBarEnabled === false) {
@@ -254,7 +288,9 @@ function placeholder(article, meta, record, kind, extras = {}) {
         tags: chrome.chips,
       })
     : null;
-  const reasonText = formatFoldReason(summary);
+  const reasonText = extras.foryou
+    ? t("foryouScoreReason", { score: extras.foryou.final.toFixed(2) })
+    : formatFoldReason(summary);
   const foldTone = foldAccent(snapshot?.settings, summary?.tag || "");
   const open = !!extras.open;
   const signature = `${lang}|${kind}|${meta.handle}|${chrome.protect?.text || ""}|${bits.join(",")}|${open ? 1 : 0}|${reasonText}|${foldTone}|${chrome.outline || ""}`;
@@ -274,7 +310,9 @@ function placeholder(article, meta, record, kind, extras = {}) {
     ? t("commentFolded", { handle: meta.handle })
     : kind === "community"
       ? t("communityFolded", { handle: meta.handle })
-      : t("collapsed", { handle: meta.handle });
+      : kind === "foryou"
+        ? t("foryouFolded", { handle: meta.handle })
+        : t("collapsed", { handle: meta.handle });
   toggle.append(title);
   if (chrome.protect) {
     const badge = document.createElement("span");
@@ -331,7 +369,9 @@ function placeholder(article, meta, record, kind, extras = {}) {
       extras.onSuspect?.();
     });
     buttons.push(suspect);
-  } else {
+  } else if (kind !== "foryou") {
+    // For You 折叠只有「展开一次」：绝不能复用「取消隐藏」
+    //（那会发 SET_HIDDEN，把作者记进 Strike 账本）。
     const unhide = document.createElement("button");
     unhide.type = "button";
     unhide.textContent = t("unhide");
@@ -380,7 +420,12 @@ function syncHidden(article, meta, matched, ai) {
   });
   const replyFold = !accountHide && decision.fold;
   const listFold = !accountHide && !replyFold && listDecision.fold;
-  const shouldFold = accountHide || replyFold || listFold;
+  // For You 低分折叠：只在 Strike/评论/社群都没折叠时生效；优先级最低。
+  const foryouResult = foryouDecisions.get(meta.tweetId);
+  const foryouFold = !accountHide && !replyFold && !listFold
+    && snapshot?.settings?.foryou?.enabled === true
+    && foryouResult?.decision === "hide";
+  const shouldFold = accountHide || replyFold || listFold || foryouFold;
   if (!shouldFold) {
     expanded.delete(meta.key);
     if (article.dataset.xslCollapsed) delete article.dataset.xslCollapsed;
@@ -390,10 +435,11 @@ function syncHidden(article, meta, matched, ai) {
   const open = expanded.has(meta.key);
   if (open) delete article.dataset.xslCollapsed;
   else article.dataset.xslCollapsed = "1";
-  const kind = accountHide ? "account" : replyFold ? "comment" : "community";
+  const kind = accountHide ? "account" : replyFold ? "comment" : listFold ? "community" : "foryou";
   placeholder(article, meta, record, kind, {
     matched,
     ai,
+    foryou: foryouFold ? foryouResult : null,
     open,
     onSuspect: () => confirmRule(article),
     onToggle: () => {
@@ -1003,6 +1049,9 @@ function render(article, meta) {
     return reason.cooled ? `${reason.packName} · ${t("fpCooled")}` : reason.packName;
   });
   if (matched?.community && !strikeReasonFromMatch(matched)) suspectTitle.push(t("communityNoStrike"));
+  const foryouResult = foryouDecisions.get(meta.tweetId);
+  const foryouSettings = settings?.foryou;
+  const foryouScored = !!(foryouSettings?.enabled && foryouResult);
   const model = {
     ...chrome,
     signature: {
@@ -1010,9 +1059,14 @@ function render(article, meta) {
       suspect: matched?.reasons?.map((reason) => `${reason.community ? "c" : "k"}:${reason.packId}:${reason.pattern}:${reason.cooled ? 1 : 0}`).join(",") || "",
       ai: ai ? `${ai.label || ai.verdict}:${ai.reason || ""}` : "",
       ask: !!settings?.ai?.enabled,
+      foryou: foryouScored ? `${foryouResult.final.toFixed(2)}:${foryouResult.decision}` : "",
     },
     markLabel: t("mark"),
     shortcutTitle: `${shortcuts.spam || "Alt+S"} · ${shortcuts.marketing || "Alt+M"} · ${shortcuts.vagueposting || "Alt+V"} · ${shortcuts.picker || "Alt+T"}`,
+    score: foryouScored && foryouSettings?.showScoreChip !== false ? {
+      label: `FY ${foryouResult.final.toFixed(2)}`,
+      title: `For You ${foryouResult.decision} · 规则 ${foryouResult.rule?.toFixed(2) ?? "–"}${foryouResult.reasons?.length ? ` · ${foryouResult.reasons.join("、")}` : ""}`,
+    } : null,
     suspect: matched ? {
       label: matched.reasons.length > 1 ? t("suspectCount", { count: matched.reasons.length }) : t("suspect"),
       title: suspectTitle.filter(Boolean).join(" · "),
@@ -1408,6 +1462,10 @@ export async function start() {
   setInterval(() => {
     scan();
     pump();
+    void foryouTick(snapshot, {
+      selfHandle: getForYouSelfHandle(),
+      onDecisions: applyForYouDecisions,
+    });
   }, 2500);
   scan();
 }

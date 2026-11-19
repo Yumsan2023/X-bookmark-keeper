@@ -1,6 +1,7 @@
 import { send } from "../lib/client.js";
 import { loadDict, translate } from "../lib/i18n.js";
-import { allowedCommunityUrl, communityPermissionOrigin, DEFAULT_TAG_EFFECT, packsToText, parseKeywordPackText, resolveLang, shortcutFromEvent, TAG_EFFECT_IDS, tagLabel } from "../lib/pure.js";
+import { allowedCommunityUrl, communityPermissionOrigin, DEFAULT_TAG_EFFECT, packsToText, parseKeywordPackText, parseTopicsText, resolveLang, shortcutFromEvent, TAG_EFFECT_IDS, tagLabel, topicsToText } from "../lib/pure.js";
+import { DEFAULT_TOPIC_PRESETS } from "../../foryou/types.ts";
 
 /** Mount the strike options UI inside a shadow root (or any parent). */
 export async function mountStrikeOptions(root) {
@@ -16,6 +17,8 @@ export async function mountStrikeOptions(root) {
   let undo = null;
   let stats = null;
   let keyDirty = false;
+  /** 话题文本框解析时的警告（readForm 收集，save 时随保存提示一起显示）。 */
+  let topicWarnings = [];
 
   const $ = (selector) => root.querySelector(selector);
 
@@ -100,6 +103,24 @@ export async function mountStrikeOptions(root) {
     $("#apiKey").value = draft.ai.apiKey || "";
     keyDirty = false;
     $("#pack-text").value = packsToText(draft.keywordPacks);
+    const fy = draft.foryou || {};
+    $("#foryouEnabled").checked = fy.enabled === true;
+    $("#foryouShowScoreChip").checked = fy.showScoreChip !== false;
+    $("#foryouAutoScroll").checked = fy.autoScroll !== false;
+    const foryouMode = fy.mode === "hybrid" || fy.mode === "vector" ? fy.mode : "rule";
+    const foryouModeInput = root.querySelector(`input[name="foryouMode"][value="${foryouMode}"]`);
+    if (foryouModeInput) foryouModeInput.checked = true;
+    $("#foryouBookmarkThreshold").value = fy.bookmarkThreshold ?? 0.7;
+    $("#foryouHideThreshold").value = fy.hideThreshold ?? 0.15;
+    $("#foryouDailyCap").value = fy.dailyCap ?? 5;
+    $("#foryouMinGapMs").value = fy.minGapMs ?? 5000;
+    const foryouDest = fy.destination?.kind === "bookmark" ? "bookmark" : "folder";
+    const foryouDestInput = root.querySelector(`input[name="foryouDestination"][value="${foryouDest}"]`);
+    if (foryouDestInput) foryouDestInput.checked = true;
+    $("#foryouFolder").value = fy.destination?.folder || "auto-foryou";
+    $("#foryouTopics").value = topicsToText(fy.topics || []);
+    $("#foryouEmbedEndpoint").value = fy.embed?.endpoint || "";
+    $("#foryouEmbedModel").value = fy.embed?.model || "";
     if (!draft.tagEffects || typeof draft.tagEffects !== "object") draft.tagEffects = {};
     renderThresholds();
     renderPacks();
@@ -677,6 +698,24 @@ export async function mountStrikeOptions(root) {
       ...pack,
       patterns: pack.patterns.filter((pattern) => String(pattern.value || "").trim()),
     }));
+    const fy = { ...(draft.foryou || {}) };
+    fy.enabled = $("#foryouEnabled").checked;
+    fy.showScoreChip = $("#foryouShowScoreChip").checked;
+    fy.autoScroll = $("#foryouAutoScroll").checked;
+    fy.mode = root.querySelector('input[name="foryouMode"]:checked')?.value || "rule";
+    fy.bookmarkThreshold = Number($("#foryouBookmarkThreshold").value);
+    fy.hideThreshold = Number($("#foryouHideThreshold").value);
+    fy.dailyCap = Number($("#foryouDailyCap").value);
+    fy.minGapMs = Number($("#foryouMinGapMs").value);
+    fy.destination = {
+      kind: root.querySelector('input[name="foryouDestination"]:checked')?.value === "bookmark" ? "bookmark" : "folder",
+      folder: $("#foryouFolder").value.trim(),
+    };
+    const parsedTopics = parseTopicsText($("#foryouTopics").value);
+    topicWarnings = parsedTopics.warnings || [];
+    fy.topics = parsedTopics.topics || [];
+    // embedding 配置 M1 只读（M3 才开放修改），不在这里回写。
+    draft.foryou = fy;
   }
 
   async function save() {
@@ -697,7 +736,8 @@ export async function mountStrikeOptions(root) {
       note(t(result?.error || "error"), "bad");
       return;
     }
-    const warnings = result.warnings || [];
+    const warnings = [...(result.warnings || []), ...topicWarnings];
+    topicWarnings = [];
     note(warnings.length ? `${t("saved")} — ${warnings.join(" ")}` : t("saved"), warnings.length ? "bad" : "ok");
     await reload();
   }
@@ -881,6 +921,28 @@ export async function mountStrikeOptions(root) {
     const result = await send({ type: "CLEAR_HIT_LOG" });
     note(result.ok ? t("saved") : t(result.error || "error"), result.ok ? "ok" : "bad");
     if (result.ok) await reload();
+  });
+  $("#foryouImportPresets").addEventListener("click", () => {
+    // 9 个预设话题只填进文本框（不直接保存）：用户改完再点保存才生效。
+    $("#foryouTopics").value = topicsToText(DEFAULT_TOPIC_PRESETS.map((preset) => ({ label: preset.label, weight: 1, keywords: preset.keywords })));
+    note(t("foryouPresetsImported"), "ok");
+  });
+  $("#foryouImportTags").addEventListener("click", async () => {
+    // 库里现有标签 → 每个标签一个话题（关键词就是标签本身），合并进文本框。
+    const result = await send({ type: "FORYOU_TAGS" });
+    if (!result?.ok) return note(t(result?.error || "error"), "bad");
+    const existing = parseTopicsText($("#foryouTopics").value).topics;
+    const labels = new Set(existing.map((topic) => topic.label));
+    let added = 0;
+    for (const tag of result.tags || []) {
+      if (existing.length >= 30) break;
+      if (labels.has(tag)) continue;
+      labels.add(tag);
+      existing.push({ id: "", label: tag, weight: 1, keywords: [tag] });
+      added += 1;
+    }
+    $("#foryouTopics").value = topicsToText(existing);
+    note(t("foryouTagsImported", { count: added }), "ok");
   });
   for (const node of root.querySelectorAll("[data-slot]")) {
     node.addEventListener("keydown", (event) => {

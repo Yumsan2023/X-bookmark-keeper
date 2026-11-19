@@ -33,6 +33,9 @@ import {
   sanitizeTagEffects,
 } from "./author-flags.js";
 
+/** For You 默认值的唯一来源在 src/foryou/types.ts；这里只引用，不另写一份。 */
+import { defaultForYouSettings } from "../../foryou/types.ts";
+
 export {
   bookmarkOutlineClass,
   decorateTagChips,
@@ -129,6 +132,12 @@ export function clampInt(value, min, max, fallback) {
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
   return Math.min(max, Math.max(min, Math.round(n)));
+}
+
+export function clampNumber(value, min, max, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
 }
 
 /**
@@ -541,6 +550,12 @@ export function defaultSettings() {
      * 0 = stay off until the user undoes it. Does not expire exceptions.
      */
     vetoCooldownDays: 14,
+    /**
+     * For You 自动筛选（M1：规则版）。默认值见 src/foryou/types.ts 的
+     * defaultForYouSettings()；试跑期 dailyCap 初始 5，长期默认值 20。
+     * embed 配置只预留给 M3 的向量版，M1 不发起任何 embedding 请求。
+     */
+    foryou: defaultForYouSettings(),
   };
 }
 
@@ -558,6 +573,8 @@ export function freshState(now = Date.now()) {
     hitLog: [],
     vetoes: [],
     rate: { day: localDay(now), count: 0, nextAllowed: 0, paused: false, backoffUntil: 0, lastError: "", rateStrikes: 0 },
+    /** For You 运行时状态（M2 才用：当日已自动收藏数 + 待执行队列）。 */
+    foryou: { day: localDay(now), bookmarkedToday: 0, queue: [] },
     index: {},
     tweetTags: {},
   };
@@ -1653,6 +1670,58 @@ export function parseKeywordPackText(text) {
 }
 
 /**
+ * For You 话题的文本格式（选项页文本框用，一行一个话题）：
+ *   名称 | 权重 | 关键词1, 关键词2
+ * 权重可省略（默认 1）；关键词部分可空。空行和 # 开头的注释行忽略。
+ */
+export function topicsToText(topics) {
+  const lines = [];
+  for (const topic of Array.isArray(topics) ? topics : []) {
+    const label = String(topic?.label || "").trim();
+    if (!label) continue;
+    const weight = Number(topic?.weight) || 1;
+    const keywords = (topic?.keywords || []).filter(Boolean).join(", ");
+    lines.push(keywords ? `${label} | ${weight} | ${keywords}` : `${label} | ${weight}`);
+  }
+  return lines.join("\n");
+}
+
+export function parseTopicsText(text) {
+  const warnings = [];
+  const topics = [];
+  const rawText = String(text || "").replace(/^\uFEFF/, "");
+  if (rawText.length > 100_000) return { ok: false, error: "too-large", topics: [], warnings };
+  for (const line of rawText.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const parts = trimmed.split("|").map((part) => part.trim());
+    const label = parts[0] || "";
+    if (!label) continue;
+    let weight = 1;
+    let keywordText = "";
+    if (parts.length === 2) {
+      // "名称 | 关键词, 关键词" 或 "名称 | 权重"
+      if (/^\d+(\.\d+)?$/.test(parts[1])) weight = Number(parts[1]);
+      else keywordText = parts[1];
+    } else if (parts.length >= 3) {
+      weight = /^\d+(\.\d+)?$/.test(parts[1]) ? Number(parts[1]) : 1;
+      keywordText = parts.slice(2).join("|");
+    }
+    if (weight < 0.1 || weight > 2) {
+      warnings.push(`话题「${label}」权重超出 0.1–2，已钳制。`);
+      weight = Math.min(2, Math.max(0.1, weight));
+    }
+    const keywords = keywordText.split(/[,，、]/).map((keyword) => keyword.trim()).filter(Boolean);
+    topics.push({ id: "", label, weight, keywords });
+    if (topics.length >= 30) {
+      warnings.push("话题最多 30 个，多余的已丢弃。");
+      break;
+    }
+  }
+  return { ok: true, topics: sanitizeForYouTopics(topics), warnings };
+}
+
+/**
  * Debug log for rule hits. Never increments a strike count.
  */
 export function recordRuleHits(state, input, now) {
@@ -2495,6 +2564,62 @@ function sanitizePacks(raw, warnings) {
   return packs;
 }
 
+/**
+ * For You embedding 端点只接受本机地址（LM Studio / Ollama 都跑在本机）。
+ * 远程地址一律拒绝，避免把推文内容发到未知服务器。
+ */
+export function isLoopbackEmbedEndpoint(raw) {
+  try {
+    const url = new URL(String(raw || ""));
+    if (url.username || url.password) return false;
+    if (url.protocol !== "http:") return false;
+    const host = url.hostname.toLowerCase();
+    return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
+function sanitizeForYouTopic(raw, index) {
+  if (!raw || typeof raw !== "object") return null;
+  const label = snippet(String(raw.label || ""), 40);
+  const keywords = [];
+  const seen = new Set();
+  for (const keyword of Array.isArray(raw.keywords) ? raw.keywords : []) {
+    const clean = String(keyword || "").trim().slice(0, 80);
+    if (!clean) continue;
+    const key = clean.normalize("NFKC").toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    keywords.push(clean);
+    if (keywords.length >= 50) break;
+  }
+  if (!label && keywords.length === 0) return null;
+  const id = String(raw.id || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40) || `topic-${index + 1}`;
+  return {
+    id,
+    label: label || keywords[0] || id,
+    weight: clampNumber(raw.weight, 0.1, 2, 1),
+    keywords,
+    auto: raw.auto === true,
+  };
+}
+
+/** 话题上限 30，每话题关键词上限 50（去重）；非法项丢弃。 */
+export function sanitizeForYouTopics(topics) {
+  const out = [];
+  const ids = new Set();
+  for (const raw of Array.isArray(topics) ? topics : []) {
+    const clean = sanitizeForYouTopic(raw, out.length);
+    if (!clean) continue;
+    if (ids.has(clean.id)) clean.id = `${clean.id}-${out.length + 1}`;
+    ids.add(clean.id);
+    out.push(clean);
+    if (out.length >= 30) break;
+  }
+  return out;
+}
+
 export function sanitizeSettings(prev, patch) {
   const base = prev ? structuredClone(prev) : defaultSettings();
   const warnings = [];
@@ -2575,6 +2700,56 @@ export function sanitizeSettings(prev, patch) {
     base.ai = ai;
   }
   base.ai.hasApiKey = !!base.ai.apiKey;
+  /**
+   * For You 自动筛选（M1：规则版）。
+   * 旧存量设置没有 foryou 时补默认值（normalizeState 走这里升级）。
+   * hideThreshold 必须 < bookmarkThreshold，否则按 bookmark 往下钳。
+   * destination.folder 拒绝 timeline:@ 前缀（那是时间线来源，不是文件夹）。
+   * embed.endpoint 只接受本机地址（M3 的 LM Studio / Ollama 预留）。
+   */
+  if (!base.foryou || typeof base.foryou !== "object" || Array.isArray(base.foryou)) {
+    base.foryou = defaultForYouSettings();
+  }
+  if (src.foryou && typeof src.foryou === "object" && !Array.isArray(src.foryou)) {
+    const fy = { ...base.foryou, embed: { ...base.foryou.embed }, destination: { ...base.foryou.destination } };
+    const fsrc = src.foryou;
+    if (typeof fsrc.enabled === "boolean") fy.enabled = fsrc.enabled;
+    if (fsrc.mode === "rule" || fsrc.mode === "vector" || fsrc.mode === "hybrid") fy.mode = fsrc.mode;
+    if (fsrc.bookmarkThreshold != null) fy.bookmarkThreshold = clampNumber(fsrc.bookmarkThreshold, 0.3, 0.95, fy.bookmarkThreshold);
+    if (fsrc.hideThreshold != null) fy.hideThreshold = clampNumber(fsrc.hideThreshold, 0.05, 0.6, fy.hideThreshold);
+    if (fy.hideThreshold >= fy.bookmarkThreshold) {
+      fy.hideThreshold = Math.min(0.6, Math.max(0.05, fy.bookmarkThreshold - 0.05));
+      warnings.push("For You 折叠阈值已调到低于收藏阈值。");
+    }
+    if (typeof fsrc.showScoreChip === "boolean") fy.showScoreChip = fsrc.showScoreChip;
+    if (typeof fsrc.autoScroll === "boolean") fy.autoScroll = fsrc.autoScroll;
+    if (fsrc.dailyCap != null) fy.dailyCap = clampInt(fsrc.dailyCap, 1, 500, fy.dailyCap);
+    if (fsrc.minGapMs != null) fy.minGapMs = clampInt(fsrc.minGapMs, 1000, 10000, fy.minGapMs);
+    if (fsrc.destination && typeof fsrc.destination === "object") {
+      const kind = fsrc.destination.kind === "folder" ? "folder" : "bookmark";
+      let folder = kind === "folder" ? String(fsrc.destination.folder || "").trim().slice(0, 80) : "";
+      if (kind === "folder" && (!folder || folder.startsWith("timeline:@"))) {
+        folder = "auto-foryou";
+        warnings.push("For You 文件夹名无效，已用 auto-foryou。");
+      }
+      fy.destination = { kind, folder };
+    }
+    if (Array.isArray(fsrc.topics)) fy.topics = sanitizeForYouTopics(fsrc.topics);
+    if (Array.isArray(fsrc.languages)) {
+      fy.languages = [...new Set(fsrc.languages.map((lang) => String(lang || "").trim().toLowerCase()).filter(Boolean))].slice(0, 10);
+    }
+    if (fsrc.profileHalfLifeDays != null) fy.profileHalfLifeDays = clampInt(fsrc.profileHalfLifeDays, 7, 365, fy.profileHalfLifeDays);
+    if (fsrc.vetoCooldownDays != null) fy.vetoCooldownDays = clampInt(fsrc.vetoCooldownDays, 0, 365, fy.vetoCooldownDays);
+    if (fsrc.embed && typeof fsrc.embed === "object") {
+      if (fsrc.embed.endpoint != null) {
+        const endpoint = String(fsrc.embed.endpoint || "").trim();
+        if (endpoint && isLoopbackEmbedEndpoint(endpoint)) fy.embed.endpoint = endpoint;
+        else if (endpoint) warnings.push("For You embedding 端点只接受本机地址。");
+      }
+      if (fsrc.embed.model != null) fy.embed.model = snippet(String(fsrc.embed.model || ""), 80) || fy.embed.model;
+    }
+    base.foryou = fy;
+  }
   return { settings: base, warnings };
 }
 
