@@ -1,7 +1,10 @@
 // @ts-nocheck
 /**
  * 端到端冒烟: 真实 Chrome + 加载 dist/ 扩展 + 本地 Mock X (HTTPS, 自签名证书)。
- * 覆盖: 凭证捕获 → queryId 失效(404)自动重新扫描 → 全量同步分页 → 429 退避 → 文件夹 → 线程 → UI 搜索 → 批量取消书签 → 增量同步 → 全量同步检测移除。
+ * 覆盖: 凭证捕获 → queryId 失效(404)自动重新扫描 → 全量同步分页 → 429 退避 → 文件夹 → 线程 → UI 搜索 → 批量取消书签 → 增量同步 → 全量同步检测移除 → For You 打分/反馈/离线验证(降级路径)/面板渲染。
+ * 注意: Mock 只能证明扩展自身的流水线（打分 → 决策记录 → 反馈 veto → 验证报告）；
+ * 它不能证明真实 X 的时间线注入位置、折叠条渲染，也不能证明真实 X 接受
+ * CreateBookmark（Mock 不实现该 GraphQL 操作）。这两项只能靠真实账号小流量试跑。
  * 用法: npm run build && npm run e2e
  */
 import { execSync } from 'node:child_process'
@@ -155,6 +158,47 @@ try {
     await pg.screenshot({ path: `${OUT}/${name}.png` })
     check(`${name} 页面渲染`, (await text(pg)).includes('X Toolkit'))
   }
+  // 9. For You (M4): 打分 → 决策记录 → 反馈 veto → 离线验证(降级) → 面板渲染
+  await msg({ type: 'UPDATE_SETTINGS', settings: { foryou: { enabled: true, mode: 'rule', bookmarkThreshold: 0.7, hideThreshold: 0.15, topics: [{ id: 'ai', label: 'AI', weight: 1, keywords: ['人工智能', '大模型'] }] } } })
+  const scored = await msg({
+    type: 'FORYOU_SCORE',
+    items: [
+      { tweetId: 'foryou-e2e-1', handle: 'alice', text: '人工智能 大模型 新进展', followed: true },
+      { tweetId: 'foryou-e2e-2', handle: 'bob', text: '今天天气真好去散步', followed: false },
+    ],
+  })
+  check('For You 打分: 命中话题判收藏、无命中判折叠', scored?.results?.[0]?.decision === 'bookmark' && scored?.results?.[1]?.decision === 'hide', JSON.stringify(scored?.results))
+  const fyRow = async (id: string) => ui.evaluate(async (tid) => {
+    const req = indexedDB.open('bookmark-keeper')
+    const db: IDBDatabase = await new Promise((r) => (req.onsuccess = () => r(req.result)))
+    return new Promise<any>((r) => { const q = db.transaction('foryouDecisions').objectStore('foryouDecisions').get(tid); q.onsuccess = () => r(q.result) })
+  }, id)
+  const row1 = await fyRow('foryou-e2e-1')
+  check('For You 决策写入本地记录', row1?.decision === 'bookmark' && row1?.handle === 'alice', JSON.stringify(row1))
+  const fb = await msg({ type: 'FORYOU_FEEDBACK', tweetId: 'foryou-e2e-1', kind: 'dislike', handle: 'alice', text: '人工智能 大模型 新进展' })
+  const row1b = await fyRow('foryou-e2e-1')
+  const xsl = await ui.evaluate(async () => (await chrome.storage.local.get('xsl')).xsl as any)
+  check('For You 反馈: dislike 记反馈并写作者 veto（不自动取消收藏）', fb?.ok === true && row1b?.feedback === 'dislike' && xsl?.settings?.foryou?.authorVetoes?.some((v: any) => v.handle === 'alice'), JSON.stringify({ fb, feedback: row1b?.feedback }))
+  // 离线验证: Mock 库只有书签、没有 timeline 负样本 → 应降级为仅正样本分布报告，不建议阈值。
+  await msg({ type: 'foryou/validate' })
+  let lastVal: any = null
+  for (let i = 0; i < 30; i++) {
+    const st = await msg({ type: 'foryou/status' })
+    lastVal = st?.lastValidation
+    if (!st?.progress) break
+    await sleep(1000)
+  }
+  check('For You 离线验证降级: 负样本不足时只给分布、不建议阈值', lastVal?.degraded === true && lastVal?.suggested == null && typeof lastVal?.posMedian === 'number', JSON.stringify(lastVal))
+  const applyDegraded = await msg({ type: 'FORYOU_APPLY_VALIDATION', id: lastVal?.id })
+  check('For You 拒绝应用无建议的验证报告', applyDegraded?.ok === false && applyDegraded?.error === 'no-suggestion', JSON.stringify(applyDegraded))
+  // For You 面板渲染: 点选项页的 For You Tab，看面板标题与决策日志出现。
+  await ui.evaluate(() => {
+    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('For You'))
+    btn?.click()
+  })
+  await sleep(1500)
+  const panelBody = await text(ui)
+  check('For You 面板渲染（画像/验证/决策日志）', panelBody.includes('For You 自动筛选') && panelBody.includes('决策日志'), panelBody.slice(0, 200).replace(/\n/g, ' | '))
   check('页面无未捕获异常', errors.length === 0, errors.join(' | '))
 } finally {
   await browser.close()

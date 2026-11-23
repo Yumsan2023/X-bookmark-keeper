@@ -245,6 +245,71 @@ export async function newestActiveSortIndex(): Promise<string | undefined> {
   return last?.sort_index
 }
 
+// ---------------- For You 画像采样（M3，设计 §3.3） ----------------
+
+export interface SampledBookmark {
+  tweet_id: string;
+  /** text + quoted.text，截断 500 字符（画像与打分同一截断） */
+  text: string;
+  screen_name: string;
+  tags: string[];
+  likes: number | null;
+  views: number | null;
+  saved_at: number;
+}
+
+export const FORYOU_SAMPLE_TEXT_MAX = 500;
+
+/** 采样用的文本：正文 + 引用正文，截断 500 字符。 */
+export function sampleTextOf(p: Post): string {
+  const text = [p.text || "", p.quoted?.text || ""].filter(Boolean).join("\n");
+  return text.slice(0, FORYOU_SAMPLE_TEXT_MAX);
+}
+
+/**
+ * 画像采样：active 书签里按 saved_at 取最新 nRecent 条，再从其余里
+ * 随机取 nRandom 条（默认各 1500，上限 3000）。返回已去重、按 saved_at
+ * 降序的样本。库为空时返回 []，调用方（runner）再报“先同步书签”。
+ * 注意：posts 表没有 saved_at 索引，这里读全表过滤后内存排序——
+ * 6 万条规模的一次性 Job 可接受，画像构建不是每 tick 的操作。
+ */
+export async function sampleBookmarks(
+  opts: { nRecent?: number; nRandom?: number; random?: () => number } = {},
+): Promise<SampledBookmark[]> {
+  const nRecent = Math.max(0, opts.nRecent ?? 1500);
+  const nRandom = Math.max(0, opts.nRandom ?? 1500);
+  const random = opts.random ?? Math.random;
+  const all = await db.posts
+    .where("status")
+    .equals("active")
+    .filter((p) => postSource(p) === "bookmark")
+    .toArray();
+  all.sort((a, b) => (b.saved_at ?? 0) - (a.saved_at ?? 0));
+  const recent = all.slice(0, nRecent);
+  const rest = all.slice(nRecent);
+  for (let i = rest.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [rest[i], rest[j]] = [rest[j], rest[i]];
+  }
+  const picked = [...recent, ...rest.slice(0, nRandom)];
+  const seen = new Set<string>();
+  return picked
+    .filter((p) => {
+      if (seen.has(p.tweet_id)) return false;
+      seen.add(p.tweet_id);
+      return true;
+    })
+    .map((p) => ({
+      tweet_id: p.tweet_id,
+      text: sampleTextOf(p),
+      screen_name: p.screen_name,
+      tags: p.tags ?? [],
+      likes: typeof p.metrics?.likes === "number" ? p.metrics.likes : null,
+      views: typeof p.metrics?.views === "number" ? p.metrics.views : null,
+      saved_at: p.saved_at ?? 0,
+    }));
+}
+
 // ---------------- 标签 ----------------
 
 export function normalizeTag(t: string): string {

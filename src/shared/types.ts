@@ -241,6 +241,13 @@ export type BgRequest =
   | { type: 'queryids/get' }
   | { type: 'ui/openLibrary' }
   | { type: 'account/current' }
+  | { type: 'foryou/buildProfile' }
+  | { type: 'foryou/cancelProfile' }
+  | { type: 'foryou/status' }
+  | { type: 'foryou/validate' }
+  | { type: 'foryou/cancelValidate' }
+  | { type: 'foryou/decisions' }
+  | { type: 'foryou/applyValidation'; validationId: string }
 
 export interface BgResponse<T = unknown> {
   ok: boolean
@@ -258,6 +265,8 @@ export const STORAGE_KEYS = {
   printIds: 'bk_print_ids',
   rate: 'bk_rate_limit',
   task: 'bk_task',
+  /** For You 画像构建 / 验证 Job 的进度（设计 §4.3） */
+  foryouProgress: 'bk_foryou_progress',
   /** Last successful full bookmark sync report meta */
   lastFullSync: 'bk_last_full_sync',
   /** Library table visible columns (LibraryColumnId[]) */
@@ -282,7 +291,7 @@ export function postSource(p: { source?: PostSource }): PostSource {
 /** 后台批量任务 (取消书签 / 推送文件夹 / 抓线程) 的进度 */
 export interface TaskProgress {
   id: string
-  kind: 'delete' | 'folder' | 'threads'
+  kind: 'delete' | 'folder' | 'threads' | 'foryou-bookmark'
   status: 'running' | 'done' | 'error' | 'cancelled'
   total: number
   done: number

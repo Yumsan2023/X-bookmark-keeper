@@ -3,7 +3,11 @@ import { OPERATIONS } from '@/api/endpoints'
 import { canonicalScreenName, screenNameFromAccountLabel, screenNameFromProfileHref } from '@/shared/accounts'
 import { getAuth, getProgress, getSettings, getTimelineProgress, saveProgress, saveTimelineProgress, bumpDbVersion, saveLastFullSync } from '@/shared/storage'
 import { STORAGE_KEYS, type BgRequest, type BgResponse } from '@/shared/types'
-import { cancelTask, deleteBookmarks, fetchThreads, pushFolder } from './actions'
+import { bookmarkTweets, cancelTask, deleteBookmarks, fetchThreads, pushFolder } from './actions'
+import { dispatch as dispatchStrike, getForYouRunBatch, noteForYouBookmarkResult, noteForYouRateLimited } from '@/strike/lib/store.js'
+import type { ForYouBookmarkItem, ForYouDestination, ForYouValidationRow } from '@/foryou/types'
+import { buildProfileJob, readForYouProfile, readForYouSettings, readLastForYouValidation, validateJob, type ForYouProfileProgress } from '@/foryou/runner'
+import { db } from '@/db/db'
 import { getAllQueryIds, getQueryId, refreshQueryIds } from './queryids'
 import { SyncEngine } from './sync-engine'
 import { TimelineSyncEngine } from './timeline-engine'
@@ -149,6 +153,169 @@ export async function startTimelineSelf() {
   void timelineEngine.startSelf().finally(stopKeepAlive)
 }
 
+/**
+ * For You 自动收藏的执行器（M2）：由 store.js 的 FORYOU_BOOKMARK 入队后
+ * 在锁外触发。从 xsl 读当前待执行队列 + 去向 / 间隔，交给
+ * bookmarkTweets(client, …) 按 runTask('foryou-bookmark') 执行；
+ * 每条成功 / 失败、每次 429 都回调回 store.js 记账（出队、计当日数、
+ * 连续 2 次 429 当天停）。队列已在入队时按 dailyCap 钳过，这里只跑
+ * 已入队的条目。runTask 已有任务在跑时直接抛错，由调用方忽略
+ * （队列持久化在 xsl，下次 FORYOU_BOOKMARK 触发时再跑）。
+ */
+export async function runForYouBookmarkQueue() {
+  // store.js 是 JS（无类型）：这里显式标注它返回的批次形状。
+  const batch = (await getForYouRunBatch()) as unknown as {
+    items: ForYouBookmarkItem[]
+    destination: ForYouDestination
+    minGapMs: number
+  } | null
+  if (!batch || !batch.items.length) return null
+  const settings = await getSettings()
+  return bookmarkTweets(client, batch.items, {
+    destination: batch.destination,
+    minGapMs: batch.minGapMs,
+    pushFolderMoveToX: settings.pushFolderMoveToX,
+    onBookmarked: (item) => noteForYouBookmarkResult(item.tweetId, true),
+    onFailed: (item) => noteForYouBookmarkResult(item.tweetId, false),
+    onRateLimited: (strikes) => noteForYouRateLimited(strikes),
+  })
+}
+
+/**
+ * For You 画像构建 Job（M3，设计 §7.3）：设置页点「重建画像」触发。
+ * 长 Job 在后台跑，调用方只拿 ok + running 就返回，进度轮询
+ * 'foryou/status'（读 bk_foryou_progress）。同一时间只跑一个；
+ * service worker 被回收时 Job 会中断，进度停在 running，调用方
+ * 可重新点「重建画像」（幂等：重建会覆盖旧画像行）。
+ */
+let foryouProfileController: AbortController | null = null
+let foryouProfileRunning = false
+
+async function readForYouProgress(): Promise<ForYouProfileProgress | null> {
+  try {
+    const got = await chrome.storage.local.get(STORAGE_KEYS.foryouProgress)
+    return (got[STORAGE_KEYS.foryouProgress] as ForYouProfileProgress | undefined) ?? null
+  } catch {
+    return null
+  }
+}
+
+export async function startForYouProfileBuild(): Promise<{ running: boolean }> {
+  if (foryouProfileRunning) return { running: true }
+  const settings = await readForYouSettings()
+  const controller = new AbortController()
+  foryouProfileController = controller
+  foryouProfileRunning = true
+  startKeepAlive()
+  void buildProfileJob({
+    embed: settings.embed,
+    halfLifeDays: settings.profileHalfLifeDays,
+    signal: controller.signal,
+  })
+    .catch(async (e) => {
+      const progress: ForYouProfileProgress = {
+        job: 'profile',
+        status: controller.signal.aborted ? 'cancelled' : 'error',
+        done: 0,
+        total: 0,
+        message: (e as Error).message,
+        updated_at: Date.now(),
+      }
+      try {
+        await chrome.storage.local.set({ [STORAGE_KEYS.foryouProgress]: progress })
+      } catch {
+        /* ignore */
+      }
+    })
+    .finally(() => {
+      foryouProfileRunning = false
+      if (foryouProfileController === controller) foryouProfileController = null
+      stopKeepAlive()
+    })
+  return { running: true }
+}
+
+export function cancelForYouProfileBuild(): { cancelled: boolean } {
+  if (!foryouProfileRunning || !foryouProfileController) return { cancelled: false }
+  foryouProfileController.abort()
+  return { cancelled: true }
+}
+
+export async function getForYouStatus(): Promise<{
+  running: boolean
+  progress: ForYouProfileProgress | null
+  profile: { builtAt: number; sampleSize: number; model: string; endpoint: string; dim: number; holdout: number } | null
+  lastValidation: ForYouValidationRow | null
+}> {
+  const profile = await readForYouProfile()
+  return {
+    running: foryouProfileRunning || foryouValidateRunning,
+    progress: await readForYouProgress(),
+    profile: profile
+      ? {
+          builtAt: profile.builtAt,
+          sampleSize: profile.sampleSize,
+          model: profile.model,
+          endpoint: profile.endpoint,
+          dim: profile.dim,
+          holdout: profile.holdoutIds.length,
+        }
+      : null,
+    lastValidation: (await readLastForYouValidation()) ?? null,
+  }
+}
+
+/**
+ * For You 离线验证 Job（M4，设计 §7.3）：面板点「离线验证」触发。
+ * 与画像构建同款编排：长 Job 在后台跑，调用方只拿 ok + running 就返回，
+ * 进度轮询 'foryou/status'（读 bk_foryou_progress）。同一时间只跑一个；
+ * 画像构建和验证互斥（共用 foryouProgress 一个 key，串行跑才不会互相覆盖进度）。
+ */
+let foryouValidateController: AbortController | null = null
+let foryouValidateRunning = false
+
+export async function startForYouValidate(): Promise<{ running: boolean; error?: string }> {
+  if (foryouValidateRunning) return { running: true }
+  if (foryouProfileRunning) return { running: false, error: '画像构建进行中，请等它结束再验证' }
+  const controller = new AbortController()
+  foryouValidateController = controller
+  foryouValidateRunning = true
+  startKeepAlive()
+  void validateJob({ signal: controller.signal })
+    .catch(async (e) => {
+      const progress: ForYouProfileProgress = {
+        job: 'validate',
+        status: controller.signal.aborted ? 'cancelled' : 'error',
+        done: 0,
+        total: 0,
+        message: (e as Error).message,
+        updated_at: Date.now(),
+      }
+      try {
+        await chrome.storage.local.set({ [STORAGE_KEYS.foryouProgress]: progress })
+      } catch {
+        /* ignore */
+      }
+    })
+    .finally(() => {
+      foryouValidateRunning = false
+      if (foryouValidateController === controller) foryouValidateController = null
+      stopKeepAlive()
+    })
+  return { running: true }
+}
+
+export function cancelForYouValidate(): { cancelled: boolean } {
+  if (!foryouValidateRunning || !foryouValidateController) return { cancelled: false }
+  foryouValidateController.abort()
+  return { cancelled: true }
+}
+
+/** 决策日志面板读最近 100 条决策（倒序）；统计行在面板里由这 100 条算。 */
+export async function getForYouDecisions() {
+  return db.foryouDecisions.orderBy('at').reverse().limit(100).toArray()
+}
+
 /** service worker 重启后: 上次未结束的同步标记为暂停, 允许用户断点续传 */
 export async function recoverInterrupted() {
   const p = await getProgress()
@@ -232,6 +399,27 @@ export async function handleMessage(msg: BgRequest): Promise<BgResponse> {
       case 'ui/openLibrary':
         await chrome.runtime.openOptionsPage()
         return { ok: true }
+      case 'foryou/buildProfile':
+        return { ok: true, data: await startForYouProfileBuild() }
+      case 'foryou/cancelProfile':
+        return { ok: true, data: cancelForYouProfileBuild() }
+      case 'foryou/status':
+        return { ok: true, data: await getForYouStatus() }
+      case 'foryou/validate':
+        return { ok: true, data: await startForYouValidate() }
+      case 'foryou/cancelValidate':
+        return { ok: true, data: cancelForYouValidate() }
+      case 'foryou/decisions':
+        return { ok: true, data: await getForYouDecisions() }
+      case 'foryou/applyValidation': {
+        // 阈值写进 xsl 必须走 store 的单写者（dispatch + locked）。
+        const res = (await dispatchStrike({ type: 'FORYOU_APPLY_VALIDATION', id: msg.validationId }, { internal: true })) as {
+          ok?: boolean
+          error?: string
+        }
+        if (!res?.ok) return { ok: false, error: res?.error ?? '应用失败' }
+        return { ok: true, data: res }
+      }
     }
   } catch (e) {
     return { ok: false, error: (e as Error).message }

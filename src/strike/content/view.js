@@ -87,6 +87,7 @@ button:focus-visible { outline: 2px solid #e85d04; outline-offset: 1px; }
 .bar.inline { gap: 4px; }
 .bar.inline .badge, .bar.inline .tagchip { padding: 1px 6px; font-size: 11px; }
 .suspect { color: #3a2d05; background: #f0c94d; border-color: #f0c94d; font-weight: 700; }
+.score { color: #c8f5e3; background: rgba(0,186,124,.16); border: 1px solid rgba(0,186,124,.4); cursor: default; }
 .ai { color: #d7c4ff; border-color: rgba(168,130,255,.5); }
 .quiet { color: #8b98a5; border-color: transparent; padding-left: 2px; padding-right: 2px; cursor: default; }
 .on { box-shadow: inset 0 0 0 1px #e85d04; }
@@ -210,6 +211,10 @@ export function mountBar(host, model, handlers) {
     },
   }));
   paintChips(bar, model, handlers);
+  if (model.score) {
+    // For You 分数徽章：只展示，不可点（点它不做任何事）。
+    bar.append(el("span", { class: "badge score", text: model.score.label, title: model.score.title || "" }));
+  }
   if (model.suspect) {
     bar.append(el("button", {
       class: "chip suspect",
