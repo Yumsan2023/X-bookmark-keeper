@@ -1,9 +1,9 @@
-import { dispatch as dispatchStrike } from '@/strike/lib/store.js'
+import { dispatch as dispatchStrike, setForYouBookmarkRunner } from '@/strike/lib/store.js'
 import { handlePartnershipStats } from './partnership'
 import { installKeywordMenus } from './keyword-menu'
 import { registerAuthCapture } from './auth-capture'
 import { installDnrRules } from './dnr'
-import { handleMessage, recoverInterrupted, startSync } from './messaging'
+import { handleMessage, recoverInterrupted, runForYouBookmarkQueue, startSync } from './messaging'
 import type { BgRequest } from '@/shared/types'
 
 function isStrikeMessage(msg: unknown): msg is { type: string } {
@@ -14,6 +14,9 @@ function isStrikeMessage(msg: unknown): msg is { type: string } {
 // MV3: 所有事件监听必须在 service worker 顶层同步注册
 registerAuthCapture()
 installKeywordMenus()
+// M2：FORYOU_BOOKMARK 入队后由 store.js 在锁外触发这里执行
+//（runTask 的长等待不能占着 store 的 locked()）。
+setForYouBookmarkRunner(() => runForYouBookmarkQueue())
 
 chrome.runtime.onMessage.addListener((msg: BgRequest, sender, sendResponse) => {
   // Read-only hover stats. Kept out of the strike dispatcher so it cannot mark or enqueue.

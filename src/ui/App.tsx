@@ -11,12 +11,13 @@ import { SettingsView } from './components/SettingsView'
 import { ProgressBox, SyncControls, SyncView, TaskBox } from './components/SyncView'
 import { SyncReportView } from './components/SyncReportView'
 import { StrikeLedgerView } from './components/StrikeLedgerView'
+import { ForYouPanel } from './components/ForYouPanel'
 import { folderColor, readDraggedIds } from './components/AccountBadges'
 import { applyUiFontSize } from '@/shared/ui-font'
 import { moveToFolder } from '@/db/posts'
 import type { Key } from './i18n'
 
-type Tab = 'library' | 'search' | 'folders' | 'tags' | 'sync' | 'settings' | 'strike'
+type Tab = 'library' | 'search' | 'folders' | 'tags' | 'sync' | 'settings' | 'strike' | 'foryou'
 
 const FULL_NAV: { id: Tab; icon: string; label: Key }[] = [
   { id: 'library', icon: '📚', label: 'tab_library' },
@@ -26,6 +27,7 @@ const FULL_NAV: { id: Tab; icon: string; label: Key }[] = [
   { id: 'sync', icon: '↻', label: 'tab_sync' },
   { id: 'settings', icon: '⚙', label: 'tab_settings' },
   { id: 'strike', icon: '⚑', label: 'tab_strike' },
+  { id: 'foryou', icon: '🎯', label: 'tab_foryou' },
 ]
 const SIDE_NAV: { id: Tab; icon: string; label: Key }[] = [
   { id: 'library', icon: '📚', label: 'tab_library' },
@@ -238,6 +240,7 @@ function Shell({ mode }: { mode: 'full' | 'side' }) {
           />
         )}
         {tab === 'strike' && <StrikeLedgerView />}
+        {tab === 'foryou' && <ForYouPanel />}
       </main>
       </div>
       <SyncReportView

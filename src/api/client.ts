@@ -192,6 +192,18 @@ export class XClient {
     })
   }
 
+  /**
+   * 在 X 端收藏一条推文（M2）。
+   * queryId 走 getQueryId：页面学习到的优先，学不到时用 endpoints.ts 的
+   * 默认值；404 / PersistedQueryNotFound 时 request() 会自动刷新一次。
+   * 未在真实账号上验证过：默认值可能已过期，首次自动收藏失败时
+   * bookmarkTweets 会把该条记为 failed 并继续下一条（仅折叠降级，
+   * 见 src/background/actions.ts），不要静默重试整批。
+   */
+  createBookmark(tweetId: string) {
+    return this.request('CreateBookmark', { method: 'POST', variables: { tweet_id: tweetId } })
+  }
+
   /** 取消 X 端书签 */
   deleteBookmark(tweetId: string) {
     return this.request('DeleteBookmark', { method: 'POST', variables: { tweet_id: tweetId } })
