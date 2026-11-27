@@ -11,7 +11,7 @@ import { mergeSettings } from '@/shared/storage'
 
 export const FULL_BACKUP_FORMAT = 'x-toolkit-full' as const
 export const FULL_BACKUP_VERSION = 1 as const
-export const APP_VERSION = '0.7.20'
+export const APP_VERSION = '2.0.0'
 /**
  * Shared ceiling for Settings → 从备份恢复.
  * `File.size` is bytes; `inspectBackupText` uses JavaScript string length.
@@ -194,7 +194,10 @@ export function buildFullBackup(input: FullBackupInput): FullBackupFile {
 
   const settings = mergeSettings(input.storage.settings ?? undefined)
   const hadLlmKey = !!settings.llm.apiKey
-  if (!includeSecrets) settings.llm = { ...settings.llm, apiKey: '' }
+  if (!includeSecrets) {
+    settings.llm = { ...settings.llm, apiKey: '' }
+    settings.notionToken = ''
+  }
 
   const auth = input.storage.auth ?? null
   const hadSession = sessionPresent(auth)

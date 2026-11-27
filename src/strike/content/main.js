@@ -1469,6 +1469,24 @@ function readLoggedInScreenName() {
   return screenNameFromProfileHref(switcherLink && switcherLink.getAttribute("href"));
 }
 
+let lastAutoSyncSentHandle = "";
+let lastAutoSyncSentAt = 0;
+
+function notifyAutoIncrementalSync() {
+  const handle = readLoggedInScreenName();
+  if (!handle) return;
+  const now = Date.now();
+  // Avoid redundant messages within 60s for the same account in this tab; SW enforces per-account cooldown.
+  if (handle === lastAutoSyncSentHandle && now - lastAutoSyncSentAt < 60_000) return;
+  lastAutoSyncSentHandle = handle;
+  lastAutoSyncSentAt = now;
+  try {
+    void chrome.runtime.sendMessage({ type: "sync/autoTrigger", screenName: handle }).catch(() => {});
+  } catch {
+    /* ignore extension context invalidated */
+  }
+}
+
 export async function start() {
   dict = await loadDict();
   overlay = createOverlay();
@@ -1485,6 +1503,10 @@ export async function start() {
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "local" && changes.xsl) applySnapshot(changes.xsl.newValue);
   });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) notifyAutoIncrementalSync();
+  });
+  setTimeout(notifyAutoIncrementalSync, 3500);
   const observer = new MutationObserver((records) => {
     if (records.some((record) => !ourMutation(record))) schedule();
   });
@@ -1525,6 +1547,7 @@ export async function start() {
   setInterval(() => {
     scan();
     pump();
+    notifyAutoIncrementalSync();
     void foryouTick(snapshot, {
       selfHandle: getForYouSelfHandle(),
       onDecisions: applyForYouDecisions,

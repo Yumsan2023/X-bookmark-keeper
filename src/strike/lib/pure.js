@@ -548,15 +548,14 @@ export function defaultSettings() {
     foldReasonEnabled: true,
     /**
      * Timeline and reply hover card. Display only: no strike, no queue.
-     * Off hides the card. The ratio fetch below stays a separate switch.
+     * Off by default in v2 so hovering avatars keeps X's native UI clean.
      */
-    hoverCardEnabled: true,
+    hoverCardEnabled: false,
     /**
-     * Per-tweet Mark bar. Display only the entry point to the Mark sheet.
-     * Off hides the bar (and its suspect/AI chips) so tweets keep X's layout;
+     * Per-tweet Mark bar. Off by default in v2 so tweets keep X's layout;
      * striking still works via the Alt+T picker / Alt+S / Alt+M / Alt+V shortcuts.
      */
-    markBarEnabled: true,
+    markBarEnabled: false,
     /**
      * Read-only UserTweets sample for the paid-partnership ratio.
      * Off by default so a hover does not spend the shared timeline rate limit.

@@ -75,24 +75,36 @@ export interface UpsertResult {
 export async function upsertParsed(
   parsed: ParsedPost[],
   runId: string,
-  opts: { folder?: string; keepSortIndex?: boolean; source?: PostSource; account?: string } = {},
+  opts: { folder?: string; keepSortIndex?: boolean; source?: PostSource; account?: string; respectTombstones?: boolean } = {},
 ): Promise<UpsertResult> {
   if (!parsed.length) return { added: 0, updated: 0, existingIds: [] }
   const ids = parsed.map((p) => p.tweet_id)
-  const existing = await db.posts.bulkGet(ids)
+  const [existing, tombRows] = await Promise.all([
+    db.posts.bulkGet(ids),
+    opts.respectTombstones ? db.coldTombstones.bulkGet(ids) : Promise.resolve([]),
+  ])
+  const tombSet = new Set<string>()
+  for (const t of tombRows) if (t?.tweet_id) tombSet.add(t.tweet_id)
+
   const existingIds: string[] = []
   let added = 0
   let updated = 0
-  const merged = parsed.map((p, i) => {
+  const merged: Post[] = []
+  parsed.forEach((p, i) => {
     const ex = existing[i]
+    if (!ex && tombSet.has(p.tweet_id)) {
+      // Cold-archived or previously cleaned item: treat as already seen so incremental sync stops cleanly.
+      existingIds.push(p.tweet_id)
+      return
+    }
     if (ex) {
       updated++
       // 之前被标记为 "unbookmarked" 的算作新书签, 不触发增量提前结束
       if (ex.status === 'active') existingIds.push(p.tweet_id)
     } else added++
-    return mergePost(ex, p, runId, opts)
+    merged.push(mergePost(ex, p, runId, opts))
   })
-  await db.posts.bulkPut(merged)
+  if (merged.length) await db.posts.bulkPut(merged)
   return { added, updated, existingIds }
 }
 

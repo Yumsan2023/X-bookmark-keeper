@@ -21,3 +21,16 @@ Thumbs.db
 .idea/
 *.log
 coverage/
+
+# Local private bookmark data sandbox & offline pipeline outputs — NEVER commit personal bookmarks
+data_sandbox/
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+*.npy
+__pycache__/
+*.pyc
+.venv/
+

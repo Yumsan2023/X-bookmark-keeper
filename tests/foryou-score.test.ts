@@ -156,9 +156,12 @@ describe('foryou blend', () => {
     expect(blend(null, null, 'rule').final).toBe(0)
   })
 
-  it('uses the vector directly in vector mode and averages in hybrid mode', () => {
+  it('uses the vector directly in vector mode and semantic-floor hybrid in hybrid mode', () => {
     expect(blend(0.6, 0.8, 'vector').final).toBeCloseTo(0.8, 6)
-    expect(blend(0.6, 0.8, 'hybrid').final).toBeCloseTo(0.7, 6)
+    // v2 semantic floor: max(0.92*0.8=0.736, 0.45*0.6 + 0.55*0.8=0.71) = 0.736
+    expect(blend(0.6, 0.8, 'hybrid').final).toBeCloseTo(0.736, 6)
+    // Below 0.75 vector threshold, uses 0.45*rule + 0.55*vector
+    expect(blend(0.6, 0.6, 'hybrid').final).toBeCloseTo(0.6, 6)
     expect(blend(0.6, 0.8, 'rule').final).toBeCloseTo(0.6, 6)
   })
 })
@@ -202,13 +205,17 @@ describe('foryou vector scoring (M3)', () => {
     expect(scoreVector([1, 0], profile({ tagCentroids: {} }))?.score).toBeCloseTo(0.6667, 3)
   })
 
-  it('scoreCandidate blends the vector in hybrid/vector mode and degrades without it', () => {
+  it('scoreCandidate blends the vector in hybrid/vector mode and rescues high-semantic stranger posts', () => {
     const hybrid = { mode: 'hybrid' as const, bookmarkThreshold: 0.7, hideThreshold: 0.15, strikeVeto: false }
-    // rule 0.10 (no topics) + vector 1.0 → hybrid 0.55 → leave
+    // v2 fix: stranger author with rule 0.10 + strong semantic vector 1.0 -> semantic floor 0.92 -> bookmark!
     const mixed = scoreCandidate(baseInput(), baseCtx(), hybrid, 1)
     expect(mixed.vector).toBeCloseTo(1, 6)
-    expect(mixed.final).toBeCloseTo(0.55, 6)
-    expect(mixed.decision).toBe('leave')
+    expect(mixed.final).toBeCloseTo(0.92, 6)
+    expect(mixed.decision).toBe('bookmark')
+    // moderate vector 0.5 -> 0.45*0.1 + 0.55*0.5 = 0.32 -> leave
+    const moderate = scoreCandidate(baseInput(), baseCtx(), hybrid, 0.5)
+    expect(moderate.final).toBeCloseTo(0.32, 6)
+    expect(moderate.decision).toBe('leave')
     const vectorOnly = scoreCandidate(baseInput(), baseCtx(), { ...hybrid, mode: 'vector' }, 1)
     expect(vectorOnly.final).toBeCloseTo(1, 6)
     expect(vectorOnly.decision).toBe('bookmark')

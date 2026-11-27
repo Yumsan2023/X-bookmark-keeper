@@ -1,13 +1,15 @@
 import { XApiError } from '@/api/errors'
-import { padSortIndex, parseThread, snowflakeToMs, type ParsedPost } from '@/api/parser'
+import { padSortIndex, parseThread, parseTimelinePage, snowflakeToMs, type ParsedPost } from '@/api/parser'
+import { addColdTombstones, listCleanupQueue, updateCleanupStatus } from '@/db/cleanup'
 import { db } from '@/db/db'
 import { addTags, moveToFolder, releaseBookmark, upsertParsed } from '@/db/posts'
+import { pushPostsToNotion } from '@/export/notion'
 import { FORYOU_AUTO_TAG, type ForYouBookmarkItem, type ForYouDestination } from '@/foryou/types'
 import { recordForYouDecision } from '@/foryou/decisions'
-import { normalizeHandle, partitionDeletes } from '@/shared/accounts'
+import { normalizeHandle, partitionDeletes, UNKNOWN_ACCOUNT } from '@/shared/accounts'
 import { STORAGE_KEYS, type TaskProgress } from '@/shared/types'
 import { bumpDbVersion, getSettings } from '@/shared/storage'
-import { nextActionDelayMs } from '@/strike/lib/pure.js'
+import { localDay, nextActionDelayMs } from '@/strike/lib/pure.js'
 import type { XClient } from '@/api/client'
 
 let current: { id: string; cancel: boolean } | null = null
@@ -173,6 +175,8 @@ export interface BookmarkTweetsOptions {
   sleepImpl?: (ms: number) => Promise<void>
   /** 单测注入：固定间隔，替代 nextActionDelayMs 的随机 jitter。生产不用传。 */
   gapMs?: () => number
+  /** v2 出队二次上限校验：每次真正发 CreateBookmark 前原子确认今日未超 dailyCap。 */
+  beforeEachBookmark?: () => Promise<boolean>
 }
 
 /**
@@ -270,6 +274,13 @@ export async function bookmarkTweets(
       }
       // 打分时记的行（带 vectorCache / feedback）不能被执行覆盖丢掉。
       const prevDecision = await db.foryouDecisions.get(id)
+      if (opts.beforeEachBookmark) {
+        const allowed = await opts.beforeEachBookmark()
+        if (!allowed) {
+          cancelTask()
+          return
+        }
+      }
       try {
         await client.createBookmark(id)
         const existing = await db.posts.get(id)
@@ -318,3 +329,174 @@ export async function bookmarkTweets(
     },
   )
 }
+
+// ---------------- v2 X 端安全清理队列执行 ----------------
+
+export interface CleanupRunResult {
+  account: string
+  queued: number
+  remainingToday: number
+  dailyCap: number
+}
+
+async function readCleanupDaily(): Promise<{ day: string; doneToday: number }> {
+  const today = localDay(Date.now())
+  try {
+    const got = await chrome.storage.local.get(STORAGE_KEYS.cleanupDaily)
+    const raw = got[STORAGE_KEYS.cleanupDaily] as { day?: string; doneToday?: number } | undefined
+    if (raw && raw.day === today) return { day: today, doneToday: Number(raw.doneToday) || 0 }
+  } catch {
+    /* ignore */
+  }
+  return { day: today, doneToday: 0 }
+}
+
+async function bumpCleanupDaily(delta = 1): Promise<number> {
+  const cur = await readCleanupDaily()
+  const next = cur.doneToday + delta
+  await chrome.storage.local.set({ [STORAGE_KEYS.cleanupDaily]: { day: cur.day, doneToday: next } })
+  return next
+}
+
+/**
+ * v2 安全清理队列执行器：
+ * 1. 只执行归属于「当前已登录 X 账号」的 pending 条目（绝不误动其他账号）；
+ * 2. 严格执行每日上限（settings.cleanupDailyCap，默认 50 条/天）；
+ * 3. 随机 3–6 秒间隔 + 遇 2 次 429 自动熔断暂停；
+ * 4. 成功后更新 cleanupQueue 状态、同步更新本地书签状态并写入冷库墓碑。
+ */
+export async function runCleanupQueue(
+  client: XClient,
+  opts: { limit?: number; removeLocal?: boolean } = {},
+): Promise<CleanupRunResult> {
+  if (current) throw new Error('已有任务在运行')
+  let account = ''
+  try {
+    account = normalizeHandle((await client.getAccountSettings()).screen_name)
+  } catch (e) {
+    throw new Error(`无法确认当前登录的 X 账号, 已取消执行清理队列: ${(e as Error).message}`)
+  }
+  if (!account) throw new Error('无法确认当前登录的 X 账号, 已取消执行清理队列')
+
+  const settings = await getSettings()
+  const dailyCap = Math.max(1, Math.min(300, Number(settings.cleanupDailyCap) || 50))
+  const daily = await readCleanupDaily()
+  const remainingToday = Math.max(0, dailyCap - daily.doneToday)
+  if (remainingToday <= 0) {
+    return { account, queued: 0, remainingToday: 0, dailyCap }
+  }
+
+  const pending = await listCleanupQueue({ account, status: 'pending' })
+  // Also allow __unknown__ only if specifically owned by current account; default strictly matches current account
+  const matched = pending.filter((row) => row.account === account || (row.accounts ?? []).includes(account))
+  const maxRun = Math.min(remainingToday, Math.max(1, opts.limit ?? remainingToday), matched.length)
+  const batch = matched.slice(0, maxRun)
+  if (!batch.length) {
+    return { account, queued: 0, remainingToday, dailyCap }
+  }
+
+  const removeLocal = opts.removeLocal === true
+  void runTask(
+    'cleanup',
+    batch.map((r) => r.tweet_id),
+    async (id) => {
+      const check = await readCleanupDaily()
+      if (check.doneToday >= dailyCap) {
+        cancelTask()
+        return
+      }
+      try {
+        await client.deleteBookmark(id)
+        await releaseBookmark(id, account, removeLocal)
+        await updateCleanupStatus(id, 'done')
+        await addColdTombstones([id])
+        await bumpCleanupDaily(1)
+      } catch (e) {
+        const msg = (e as Error)?.message?.slice(0, 200) ?? String(e)
+        if (!(e instanceof XApiError && e.code === 'rate_limit')) {
+          await updateCleanupStatus(id, 'failed', msg)
+        }
+        throw e
+      }
+    },
+    { account, skipped: pending.length - matched.length },
+    {
+      gapMs: () => 3000 + Math.random() * 3000,
+      maxRateLimitStrikes: 2,
+    },
+  ).catch(() => {})
+
+  return {
+    account,
+    queued: batch.length,
+    remainingToday: Math.max(0, remainingToday - batch.length),
+    dailyCap,
+  }
+}
+
+// ---------------- v2 残缺内容定向补全 (长文 / Thread / t.co 还原) ----------------
+
+const TCO_RE = /https?:\/\/t\.co\/[A-Za-z0-9]+/g
+
+async function expandTcoUrl(url: string): Promise<string> {
+  try {
+    const res = await fetch(url, { method: 'HEAD', redirect: 'follow', signal: AbortSignal.timeout(8000) })
+    return res.url && !res.url.includes('t.co/') ? res.url : url
+  } catch {
+    return url
+  }
+}
+
+/** 针对截断长文、缺失 Thread、或含 t.co 短链的书签做定向补抓与更新。 */
+export function repairIncompletePosts(client: XClient, tweetIds: string[]) {
+  const unique = [...new Set(tweetIds)]
+  return runTask('repair', unique, async (id) => {
+    const existing = await db.posts.get(id)
+    if (!existing) return
+    const json = await client.getTweetDetail(id)
+    const thread = parseThread(json, id)
+    const page = parseTimelinePage(json)
+    const freshEntry = page.entries.find(
+      (e): e is { kind: 'tweet'; post: ParsedPost } => e.kind === 'tweet' && e.post.tweet_id === id,
+    )
+    let text = freshEntry && freshEntry.post.text.length > existing.text.length ? freshEntry.post.text : existing.text
+    let urls = freshEntry && freshEntry.post.urls.length >= existing.urls.length ? [...freshEntry.post.urls] : [...existing.urls]
+
+    // Expand any remaining t.co short URLs
+    const tcoHits = [...new Set([...(text.match(TCO_RE) ?? []), ...urls.filter((u) => u.includes('t.co/'))])]
+    for (const shortUrl of tcoHits.slice(0, 6)) {
+      const expanded = await expandTcoUrl(shortUrl)
+      if (expanded !== shortUrl) {
+        text = text.split(shortUrl).join(expanded)
+        urls = urls.map((u) => (u === shortUrl ? expanded : u))
+      }
+    }
+
+    await db.posts.update(id, {
+      text,
+      urls,
+      quoted: freshEntry?.post.quoted ?? existing.quoted,
+      media: freshEntry && freshEntry.post.media.length > existing.media.length ? freshEntry.post.media : existing.media,
+      thread: thread.length >= (existing.thread?.length ?? 0) ? thread : existing.thread,
+      thread_fetched_at: Date.now(),
+    })
+  })
+}
+
+// ---------------- v2 一键推送精选至 Notion ----------------
+
+export function pushBookmarksToNotion(tweetIds: string[]) {
+  const unique = [...new Set(tweetIds)]
+  return runTask('notion', unique, async (id) => {
+    const settings = await getSettings()
+    const post = await db.posts.get(id)
+    if (!post) return
+    const res = await pushPostsToNotion([post], {
+      token: settings.notionToken,
+      databaseId: settings.notionDatabaseId,
+    })
+    if (res.failed > 0) throw new Error(res.errors[0] || 'Notion 推送失败')
+  })
+}
+
+export { UNKNOWN_ACCOUNT }

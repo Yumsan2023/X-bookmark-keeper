@@ -640,6 +640,18 @@ export async function noteForYouBookmarkResult(tweetId, ok) {
   });
 }
 
+export async function canForYouBookmarkMoreToday() {
+  return locked(async () => {
+    const now = Date.now();
+    const state = await readRaw();
+    rollForYouDay(state, now);
+    const fy = state.settings?.foryou || defaultForYouSettings();
+    if (!fy.enabled) return false;
+    if (now < (state.foryou.backoffUntil || 0)) return false;
+    return (state.foryou.bookmarkedToday || 0) < fy.dailyCap;
+  });
+}
+
 /**
  * 429 连击记账（M2）：第 1 次只记连击数（runTask 自己会等 resetAt 再
  * 重试该条，不在这里设 backoff——否则退避窗口内新到的打分批次会被
@@ -661,6 +673,14 @@ export async function dispatch(message, sender = {}) {
   const type = message?.type;
   if (!type) return Promise.resolve({ ok: false, error: "bad-message" });
   if (type === "SUGGEST") return suggest(message);
+  // v2 性能修复：FORYOU_SCORE 先在锁内拍一份只读快照，把本地 /embeddings 网络推理放在锁外执行，
+  // 防止 LM Studio 冷启动加载模型 (2-5s) 阻塞 Alt+T 标记与面板点击。
+  if (type === "FORYOU_SCORE") {
+    const denied = timelineOrEditor(sender);
+    if (denied) return denied;
+    const stateSnapshot = await locked(async () => structuredClone(await readRaw()));
+    return scoreForYouBatch(stateSnapshot, message.items);
+  }
   const result = await locked(async () => {
     const now = Date.now();
     const state = await readRaw();

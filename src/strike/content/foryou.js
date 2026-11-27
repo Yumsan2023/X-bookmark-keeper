@@ -16,18 +16,35 @@ const EMPTY_SCROLL_LIMIT = 3;
 const IDLE_MS = 30_000;
 /** 打分请求失败后多久不再重试（避免每 2.5s 刷一次失败请求）。 */
 const SCORE_COOLDOWN_MS = 30_000;
+/** v2 风控：单次会话最多自动扫描 150 条后自动暂停滚动，防机械挂机特征。 */
+export const FORYOU_SESSION_CAP = 150;
 
 const seenIds = new Set();
 let scoring = false;
 let scoreCooldownUntil = 0;
 let lastUserActivity = 0;
 let emptyScrolls = 0;
+let nextScrollAfter = 0;
+let sessionScanned = 0;
 let activityListenersAttached = false;
 
 /** 供 main.js 在设置开关变化时调用：让已看过的推文重新参与打分。 */
 export function resetForYouSeen() {
   seenIds.clear();
   emptyScrolls = 0;
+  sessionScanned = 0;
+  nextScrollAfter = 0;
+}
+
+/** v2 拟人化阅读停留：按本屏推文平均字数动态拉长停留（短帖 1.5–3s，长文 4–8s，偶发额外停顿）。 */
+export function computeHumanDwellMs(items, random = Math.random) {
+  const avgLen = items?.length
+    ? items.reduce((sum, it) => sum + (it.text?.length || 0), 0) / items.length
+    : 80;
+  const r = random();
+  let ms = avgLen >= 300 ? 4000 + r * 4000 : 1500 + r * 1500;
+  if (random() < 0.12) ms += 3000 + random() * 3000;
+  return Math.round(ms);
 }
 
 function attachActivityListeners() {
@@ -88,18 +105,24 @@ export function collectCandidates(selfHandle) {
       handle: parsed.handle,
       text: parsed.text || "",
       followed: parsed.followed ?? null,
+      likes: parsed.likes ?? null,
     });
     articles.set(parsed.tweetId, article);
   }
   return { items, articles };
 }
 
-function maybeAutoScroll(foryouSettings) {
+function maybeAutoScroll(foryouSettings, items = []) {
   if (!foryouSettings.autoScroll) return false;
   if (emptyScrolls >= EMPTY_SCROLL_LIMIT) return false;
+  if (sessionScanned >= FORYOU_SESSION_CAP) return false;
   if (document.hidden) return false;
-  if (Date.now() - lastUserActivity < IDLE_MS) return false;
-  window.scrollBy(0, Math.floor(window.innerHeight * 0.8));
+  const now = Date.now();
+  if (now - lastUserActivity < IDLE_MS) return false;
+  if (now < nextScrollAfter) return false;
+  const ratio = 0.65 + Math.random() * 0.25;
+  window.scrollBy({ top: Math.floor(window.innerHeight * ratio), behavior: "smooth" });
+  nextScrollAfter = now + computeHumanDwellMs(items);
   return true;
 }
 
@@ -135,6 +158,7 @@ export async function foryouTick(snapshot, hooks = {}) {
     const res = await send({ type: "FORYOU_SCORE", items });
     if (res?.ok && Array.isArray(res.results)) {
       for (const result of res.results) seenIds.add(result.tweetId);
+      sessionScanned += res.results.length;
       hooks.onDecisions?.(res.results, articles, items);
     } else {
       scoreCooldownUntil = Date.now() + SCORE_COOLDOWN_MS;
@@ -144,5 +168,5 @@ export async function foryouTick(snapshot, hooks = {}) {
   } finally {
     scoring = false;
   }
-  maybeAutoScroll(fy);
+  maybeAutoScroll(fy, items);
 }

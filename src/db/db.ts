@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie'
-import type { Folder, Post } from '@/shared/types'
+import type { CleanupQueueRow, ColdTombstoneRow, Folder, Post } from '@/shared/types'
 import type { ForYouDecisionRow, ForYouProfileRow, ForYouValidationRow } from '@/foryou/types'
 
 export interface SearchMetaRow {
@@ -19,6 +19,8 @@ export class BookmarkDB extends Dexie {
   foryouProfile!: Table<ForYouProfileRow, string>
   foryouDecisions!: Table<ForYouDecisionRow, string>
   foryouValidations!: Table<ForYouValidationRow, string>
+  cleanupQueue!: Table<CleanupQueueRow, string>
+  coldTombstones!: Table<ColdTombstoneRow, string>
 
   constructor(name = 'bookmark-keeper') {
     super(name)
@@ -59,8 +61,6 @@ export class BookmarkDB extends Dexie {
           }),
       )
     // v5 (M2): 只加 For You 的三张表, posts/folders/searchMeta 不动, 旧数据零迁移。
-    // foryouDecisions 是 M2 执行日志; foryouProfile / foryouValidations 的
-    // 行由 M3 画像构建 / M4 离线验证写入, 这里只先把表建好 (设计 §4.1)。
     this.version(5).stores({
       posts:
         'tweet_id, sort_index, screen_name, created_at, folder, status, sync_run, source, has_image, has_video, has_link, has_quote, *tags, *accounts',
@@ -69,6 +69,19 @@ export class BookmarkDB extends Dexie {
       foryouProfile: 'key',
       foryouDecisions: 'tweet_id, at, decision, feedback',
       foryouValidations: 'id, at',
+    })
+    // v6 (v2.0): 新增 saved_at 与 [source+status+saved_at] 复合索引加速画像采样与分页;
+    // 新增 cleanupQueue (按账号 X 端待清理安全队列) 与 coldTombstones (冷库瘦身墓碑, 防重复回灌).
+    this.version(6).stores({
+      posts:
+        'tweet_id, sort_index, screen_name, created_at, saved_at, folder, status, sync_run, source, [source+status+saved_at], has_image, has_video, has_link, has_quote, *tags, *accounts',
+      folders: 'name, x_id, source',
+      searchMeta: 'key',
+      foryouProfile: 'key',
+      foryouDecisions: 'tweet_id, at, decision, feedback',
+      foryouValidations: 'id, at',
+      cleanupQueue: 'tweet_id, account, status, added_at',
+      coldTombstones: 'tweet_id, archived_at',
     })
   }
 }

@@ -193,6 +193,16 @@ export interface Settings {
   confirmBulkDelete: boolean
   /** 分批导出每批条数 (默认 1000) */
   exportBatchSize: number
+  /** v2: 打开 x.com 自动识别当前账号并静默增量同步 */
+  autoSyncOnXOpen: boolean
+  /** v2: 同一账号自动增量同步的最小冷却分钟数 (默认 20 分钟) */
+  autoSyncCooldownMin: number
+  /** v2: X 端安全清理队列每日取消收藏上限 (默认 50) */
+  cleanupDailyCap: number
+  /** v2: Notion Integration Token (仅存本机, 备份默认不含) */
+  notionToken: string
+  /** v2: Notion 目标数据库 ID */
+  notionDatabaseId: string
   llm: LlmConfig
 }
 
@@ -209,6 +219,11 @@ export const DEFAULT_SETTINGS: Settings = {
   pushFolderMoveToX: false,
   confirmBulkDelete: true,
   exportBatchSize: 1000,
+  autoSyncOnXOpen: true,
+  autoSyncCooldownMin: 20,
+  cleanupDailyCap: 50,
+  notionToken: '',
+  notionDatabaseId: '',
   llm: {
     endpoint: 'https://api.openai.com/v1',
     apiKey: '',
@@ -223,6 +238,7 @@ export const DEFAULT_SETTINGS: Settings = {
 // ---------------- 消息 ----------------
 export type BgRequest =
   | { type: 'sync/start'; mode: SyncMode; account?: string }
+  | { type: 'sync/autoTrigger'; screenName?: string }
   | { type: 'sync/pause' }
   | { type: 'sync/resume'; account?: string }
   | { type: 'sync/cancel' }
@@ -234,6 +250,9 @@ export type BgRequest =
   | { type: 'timeline/cancel' }
   | { type: 'timeline/status' }
   | { type: 'bookmarks/delete'; tweetIds: string[]; removeLocal: boolean }
+  | { type: 'cleanup/run'; limit?: number; removeLocal?: boolean }
+  | { type: 'repair/incomplete'; tweetIds: string[] }
+  | { type: 'notion/push'; tweetIds: string[] }
   | { type: 'folder/push'; tweetIds: string[]; folder: string }
   | { type: 'threads/fetch'; tweetIds: string[] }
   | { type: 'auth/status' }
@@ -275,7 +294,37 @@ export const STORAGE_KEYS = {
   accounts: 'bk_accounts',
   /** Last handle the user confirmed for bookmark stamps (lowercase, no @). */
   stampAccount: 'bk_stamp_account',
+  /** v2: per-account last auto-sync timestamp (ms) */
+  autoSyncLast: 'bk_auto_sync_last',
+  /** v2: per-day X cleanup execution counter */
+  cleanupDaily: 'bk_cleanup_daily',
+  /** v2: Daily Review state { day, ids, reviewedIds } */
+  dailyReview: 'bk_daily_review',
 } as const
+
+/** v2: X 端安全清理队列行（仅分类标记，须用户手动触发限速执行） */
+export type CleanupItemStatus = 'pending' | 'done' | 'failed' | 'skipped'
+
+export interface CleanupQueueRow {
+  tweet_id: string
+  /** 小写收藏账号 handle 或 __unknown__ */
+  account: string
+  accounts: string[]
+  screen_name: string
+  url: string
+  text_preview: string
+  reason: string
+  status: CleanupItemStatus
+  added_at: number
+  executed_at?: number
+  error?: string
+}
+
+/** v2: 冷库/已清理墓碑 ID（轻量集合，防止增量同步把已瘦身移出热库的旧书签重新拉回热库） */
+export interface ColdTombstoneRow {
+  tweet_id: string
+  archived_at: number
+}
 
 /** 时间线帖子的本地文件夹前缀, 形如 timeline:@alice */
 export const TIMELINE_FOLDER_PREFIX = 'timeline:@'
@@ -288,10 +337,10 @@ export function postSource(p: { source?: PostSource }): PostSource {
   return p.source === 'timeline' ? 'timeline' : 'bookmark'
 }
 
-/** 后台批量任务 (取消书签 / 推送文件夹 / 抓线程) 的进度 */
+/** 后台批量任务 (取消书签 / 推送文件夹 / 抓线程 / 清理队列 / 残缺补全 / Notion 推送) 的进度 */
 export interface TaskProgress {
   id: string
-  kind: 'delete' | 'folder' | 'threads' | 'foryou-bookmark'
+  kind: 'delete' | 'folder' | 'threads' | 'foryou-bookmark' | 'cleanup' | 'repair' | 'notion'
   status: 'running' | 'done' | 'error' | 'cancelled'
   total: number
   done: number
