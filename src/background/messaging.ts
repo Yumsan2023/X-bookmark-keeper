@@ -3,8 +3,9 @@ import { OPERATIONS } from '@/api/endpoints'
 import { canonicalScreenName, screenNameFromAccountLabel, screenNameFromProfileHref } from '@/shared/accounts'
 import { getAuth, getProgress, getSettings, getTimelineProgress, saveProgress, saveTimelineProgress, bumpDbVersion, saveLastFullSync } from '@/shared/storage'
 import { STORAGE_KEYS, type BgRequest, type BgResponse } from '@/shared/types'
-import { bookmarkTweets, cancelTask, deleteBookmarks, fetchThreads, pushFolder } from './actions'
-import { dispatch as dispatchStrike, getForYouRunBatch, noteForYouBookmarkResult, noteForYouRateLimited } from '@/strike/lib/store.js'
+import { bookmarkTweets, cancelTask, deleteBookmarks, fetchThreads, pushBookmarksToNotion, pushFolder, repairIncompletePosts, runCleanupQueue } from './actions'
+import { decideAutoSync, markAutoSyncRan, readAutoSyncLastMap } from './auto-sync'
+import { canForYouBookmarkMoreToday, dispatch as dispatchStrike, getForYouRunBatch, noteForYouBookmarkResult, noteForYouRateLimited } from '@/strike/lib/store.js'
 import type { ForYouBookmarkItem, ForYouDestination, ForYouValidationRow } from '@/foryou/types'
 import { buildProfileJob, readForYouProfile, readForYouSettings, readLastForYouValidation, validateJob, type ForYouProfileProgress } from '@/foryou/runner'
 import { db } from '@/db/db'
@@ -139,6 +140,54 @@ export async function startSync(mode: 'incremental' | 'full' | 'resume', account
   void engine.start(mode, name ? { account: name } : undefined).finally(stopKeepAlive)
 }
 
+/**
+ * v2 打开 x.com 自动识别登录账号并静默增量扫描：
+ * 免手动选账号、免手动点同步；按账号冷却节流防风控；
+ * 同步到新书签后在扩展图标短暂显示 +N 徽标。
+ */
+export async function handleAutoSyncTrigger(hintScreenName?: string): Promise<{
+  triggered: boolean
+  reason: string
+  account?: string
+}> {
+  const settings = await getSettings()
+  const auth = await getAuth()
+  const hasAuth = !!(auth?.token && auth.csrf)
+  let account = canonicalScreenName(hintScreenName)
+  if (!account && hasAuth) {
+    try {
+      account = (await resolveCurrentAccount()).screen_name
+    } catch {
+      account = ''
+    }
+  }
+  const lastMap = await readAutoSyncLastMap()
+  const decision = decideAutoSync({
+    settings,
+    hasAuth,
+    busy: engine.isRunning || timelineEngine.isRunning,
+    account,
+    lastMap,
+  })
+  if (!decision.run || !decision.account) {
+    return { triggered: false, reason: decision.reason, account: decision.account }
+  }
+  await rememberBookmarkAccount(decision.account, auth?.user_id)
+  await markAutoSyncRan(decision.account)
+  startKeepAlive()
+  void engine
+    .start('incremental', { account: decision.account })
+    .then((prog) => {
+      if (prog.added > 0 && typeof chrome !== 'undefined' && chrome.action?.setBadgeText) {
+        void chrome.action.setBadgeBackgroundColor?.({ color: '#10b981' })
+        void chrome.action.setBadgeText({ text: `+${Math.min(prog.added, 99)}` })
+        setTimeout(() => void chrome.action.setBadgeText({ text: '' }), 15_000)
+      }
+    })
+    .finally(stopKeepAlive)
+  return { triggered: true, reason: 'ok', account: decision.account }
+}
+
 export async function startTimeline(handle: string) {
   if (timelineEngine.isRunning) return
   if (engine.isRunning) throw new Error('书签同步进行中, 请先完成或取消后再同步发帖')
@@ -175,6 +224,7 @@ export async function runForYouBookmarkQueue() {
     destination: batch.destination,
     minGapMs: batch.minGapMs,
     pushFolderMoveToX: settings.pushFolderMoveToX,
+    beforeEachBookmark: async () => Boolean(await canForYouBookmarkMoreToday()),
     onBookmarked: (item) => noteForYouBookmarkResult(item.tweetId, true),
     onFailed: (item) => noteForYouBookmarkResult(item.tweetId, false),
     onRateLimited: (strikes) => noteForYouRateLimited(strikes),
@@ -334,6 +384,8 @@ export async function handleMessage(msg: BgRequest): Promise<BgResponse> {
       case 'sync/start':
         await startSync(msg.mode, msg.account)
         return { ok: true }
+      case 'sync/autoTrigger':
+        return { ok: true, data: await handleAutoSyncTrigger(msg.screenName) }
       case 'sync/pause':
         engine.pause()
         return { ok: true }
@@ -388,6 +440,14 @@ export async function handleMessage(msg: BgRequest): Promise<BgResponse> {
       }
       case 'bookmarks/delete':
         return { ok: true, data: await deleteBookmarks(client, msg.tweetIds, msg.removeLocal) }
+      case 'cleanup/run':
+        return { ok: true, data: await runCleanupQueue(client, { limit: msg.limit, removeLocal: msg.removeLocal }) }
+      case 'repair/incomplete':
+        void repairIncompletePosts(client, msg.tweetIds)
+        return { ok: true }
+      case 'notion/push':
+        void pushBookmarksToNotion(msg.tweetIds)
+        return { ok: true }
       case 'account/current':
         return { ok: true, data: await resolveCurrentAccount() }
       case 'folder/push':

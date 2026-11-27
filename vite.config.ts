@@ -1,5 +1,6 @@
 import { defineConfig, build as viteBuild } from 'vite'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -46,7 +47,7 @@ function strikeContentScript() {
 //  - background: 单独的 ES module service worker (固定文件名 background.js)
 //  - options / sidepanel / popup / print: HTML 页面入口
 export default defineConfig({
-  plugins: [react(), strikeContentScript()],
+  plugins: [tailwindcss(), react(), strikeContentScript()],
   resolve: { alias: { '@': resolve(root, 'src') } },
   build: {
     outDir: 'dist',

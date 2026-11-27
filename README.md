@@ -1,17 +1,22 @@
-# X Toolkit — X (Twitter) 书签管家 + 打击账本 (Chrome MV3 扩展)
+# X Toolkit — X (Twitter) 书签知识库工作台 + 时间线实验室 (Chrome MV3 扩展)
 
-**当前版本: 0.7.20** — 一个扩展同时包含书签库与打击账本 / Strike Ledger。把你在 X 上的**书签**与指定账号的**公开发帖** (UserTweets) 同步到本地 IndexedDB，提供中英文全文搜索、文件夹/标签管理、批量操作、导出和可选的 AI 内容标签；同时在 x.com 时间线上标记垃圾/营销账号，本地折叠，必要时经你确认后通过 X 自己的菜单静音/屏蔽。
+**当前版本: 2.0.0** — 面向超大规模书签库（60,000+ 条）重构的 **Linear / Readwise 风格知识工作台**。支持热冷分离架构（离线 Python SQLite 冷库 + 本地 `bge-m3` / LLM 归类 + 扩展内 22MB 精选热库）、打开 `x.com` 自动识别登录账号静默增量同步、10 大领域文件夹拖拽归类、每日唤醒（Daily Review）、安全清理队列（防回灌墓碑 + 限速取消收藏）、Notion 直推与自包含离线 HTML 导出；并将 **For You 智能策展**与 **Strike Ledger 打击账本**统一收拢到可选的「时间线实验室」（默认无打扰）。
 
-本产品此前名为 Bookmark Keeper；本地书签库 IndexedDB 名仍是 `bookmark-keeper`，旧库可直接升级。在 x.com 时间线上标记垃圾/营销的账本与书签同步共用一个工具栏图标。请停用单独安装的 X Strike Ledger，否则两个内容脚本会同时注入。
+本地书签库 IndexedDB 名仍为 `bookmark-keeper`（Dexie schema 已平滑升级至 v6），旧库可直接升级。请停用单独安装的旧版 X Strike Ledger，避免重复注入内容脚本。
 
-灵感来自 twillot 的书签/时间线思路（只借鉴整体架构与端点名称，**代码全部重新编写**，不含 twillot 的名称/图标/域名，也没有复制其 MPL-2.0 源文件）。不做发推、点赞、关注、授权/付费墙/多账号。
+### v2.0.0 核心升级亮点
+- **热冷分离与零删除离线流水线**（`data-pipeline/`）：支持将 100MB+ 历史备份无损导入本地 SQLite + FTS5 冷库，经规则 + 本地 `bge-m3` 向量 + 可选本地 LLM 三级漏斗自动归类至 10 大领域文件夹，导出轻量精选热库（~22MB，体积瘦身 80%+）与分账号待清理队列，全程 100% 本机运行、绝不自动删除任何书签。
+- **打开 x.com 无感自动增量同步**：自动识别当前登录 `@handle`，按冷却时间静默增量抓取新书签并在图标显示 `+N` 徽章，同时自动跳过冷库墓碑防回灌。
+- **全新 Tailwind CSS v4 + Lucide 现代工作台**：左侧固定导航 + 中间卡片/表格/画廊视图 + 右侧细读抽屉 + `Cmd+K` 全局命令面板 + `J/K/Enter/X` 键盘流 + 每日 5 条旧书签唤醒 + 自包含离线 HTML 导出与 Notion 直推。
+- **安全清理队列 & 残缺补全**：按收藏账号分组展示待审条目，仅针对当前登录账号手动限速执行取消收藏（随机延迟 + 每日上限 + 遇 429 自动熔断）；支持扫描并定向补抓截断长文、串推（Thread）与 `t.co` 短链。
+- **For You 引擎 4 项核心缺陷修复 + Strike 无打扰默认**：修复点赞数解析与 Hybrid 高语义保底、将本地 Embedding 移出互斥锁、在 `CreateBookmark` 出队前二次原子校验每日上限、增加拟人化阅读停留与 150 条会话熔断；时间线 Mark 行与头像悬停卡默认关闭。
 
 <details>
 <summary><strong>English summary</strong></summary>
 
-Chrome MV3 extension **X Toolkit**. It syncs X **bookmarks** and optional public **UserTweets** into local IndexedDB, and adds a local **Strike Ledger**: mark Spam / Marketing on the x.com timeline, then hide locally or (only if you turn it on) mute/block through X’s own menu. **Not verified against real X accounts** in this repo; unit tests + Mock-X e2e only. May violate X ToS; use at your own risk. MIT License.
+Chrome MV3 extension **X Toolkit v2.0.0**. A Readwise/Linear-inspired local knowledge workbench for X bookmarks with hot/cold architecture (`data-pipeline/` offline SQLite + local `bge-m3` funnel), silent auto-sync on opening `x.com`, full-text Chinese/English search, Daily Review, rate-limited Safe Cleanup Queue with cold tombstones, Notion push, self-contained HTML / Obsidian export, plus an optional non-intrusive Timeline Lab (For You curation + Strike Ledger). MIT License.
 
-Step-by-step: [docs/USAGE.md](./docs/USAGE.md) · Develop: [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md) · Contribute: [CONTRIBUTING.md](./CONTRIBUTING.md)
+Step-by-step: [docs/USAGE.md](./docs/USAGE.md) · Develop: [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md) · Offline Pipeline: [data-pipeline/README.md](./data-pipeline/README.md) · Contribute: [CONTRIBUTING.md](./CONTRIBUTING.md)
 
 </details>
 

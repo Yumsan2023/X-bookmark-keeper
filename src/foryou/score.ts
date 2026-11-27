@@ -184,10 +184,11 @@ export function decide(
 }
 
 /**
- * 规则/向量混合（设计 §3.3）：
- * - vector：向量分直接作 final（M3 才有）。
- * - hybrid：0.5×rule + 0.5×vector（M3 才有）。
- * - rule，或 vector 为 null（M3 画像未建好）时自动退化为规则版；rule 为 null 时 0。
+ * 规则/向量混合（v2 修复陌生作者盲区）：
+ * - vector：向量分直接作 final。
+ * - hybrid：max(0.92×vector, 0.45×rule + 0.55×vector) —— 高置信语义保底，
+ *   让新作者/英文深度好帖（字面关键词未命中时）也能凭借 bge-m3 向量顺利过线。
+ * - rule，或 vector 为 null 时自动退化为规则版。
  */
 export function blend(
   rule: number | null,
@@ -196,7 +197,9 @@ export function blend(
 ): { rule: number | null; vector: number | null; final: number } {
   if (mode === "vector" && vector != null) return { rule, vector, final: clamp01(vector) };
   if (mode === "hybrid" && rule != null && vector != null) {
-    return { rule, vector, final: clamp01(0.5 * rule + 0.5 * vector) };
+    const weighted = 0.45 * rule + 0.55 * vector;
+    const semanticFloor = vector >= 0.75 ? 0.92 * vector : 0;
+    return { rule, vector, final: clamp01(Math.max(weighted, semanticFloor)) };
   }
   return { rule, vector, final: clamp01(rule ?? 0) };
 }

@@ -267,7 +267,11 @@ export class SyncEngine {
       if (!page.recognized) throw new XApiError('data', '无法识别 Bookmarks 响应结构 (X 可能改版), 请查看 README 的 queryId/结构变动说明')
       const tweets = page.entries.filter((e): e is { kind: 'tweet'; post: ParsedPost } => e.kind === 'tweet').map((e) => e.post)
       const deleted = page.entries.filter((e) => e.kind === 'deleted').map((e) => (e as { tweet_id: string }).tweet_id)
-      const r = await upsertParsed(tweets, runId, { source: 'bookmark', account: this.prog.account })
+      const r = await upsertParsed(tweets, runId, {
+        source: 'bookmark',
+        account: this.prog.account,
+        respectTombstones: !full,
+      })
       if (deleted.length) await markTweetsDeleted(deleted, runId)
       this.seenInBookmarks += tweets.length + deleted.length
       const nextCursor = page.cursor && page.cursor !== cursor ? page.cursor : undefined

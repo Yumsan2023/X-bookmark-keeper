@@ -159,6 +159,7 @@ export function parseArticle(article, ctx = {}) {
   if (!bio && pathHandle.toLowerCase() === handle.toLowerCase()) bio = String(ctx.profileBio || "");
 
   const followed = detectFollowed(article, outsideQuote, ctx, handle);
+  const likes = parseEngagementCount(article, outsideQuote, ["like", "unlike"]);
   return {
     handle,
     displayName,
@@ -167,8 +168,40 @@ export function parseArticle(article, ctx = {}) {
     text,
     bio,
     followed,
+    likes,
     userId: `h:${handle.toLowerCase()}`,
   };
+}
+
+/** Parse compact numbers from X aria-label / visible text (e.g. "1,234 Likes", "2.5K", "1.3万"). */
+export function parseCompactNumber(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return null;
+  const m = s.match(/(\d+(?:[.,]\d+)?)\s*(万|千|[kKmMbB])?/);
+  if (!m) return null;
+  const numStr = m[1].replace(/,(?=\d{3}\b)/g, "");
+  const base = Number(numStr);
+  if (!Number.isFinite(base)) return null;
+  const unit = (m[2] || "").toLowerCase();
+  if (unit === "k" || unit === "千") return Math.round(base * 1_000);
+  if (unit === "万") return Math.round(base * 10_000);
+  if (unit === "m") return Math.round(base * 1_000_000);
+  if (unit === "b") return Math.round(base * 1_000_000_000);
+  return Math.round(base);
+}
+
+function parseEngagementCount(article, outsideQuote, testIds) {
+  for (const id of testIds) {
+    const nodes = [...article.querySelectorAll(`[data-testid="${id}"]`)].filter(outsideQuote);
+    for (const node of nodes) {
+      const label = node.getAttribute("aria-label") || "";
+      const fromLabel = parseCompactNumber(label);
+      if (fromLabel !== null) return fromLabel;
+      const fromText = parseCompactNumber(visibleText(node));
+      if (fromText !== null) return fromText;
+    }
+  }
+  return null;
 }
 
 function detectFollowed(article, outsideQuote, ctx, handle) {

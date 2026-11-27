@@ -332,7 +332,8 @@ describe('foryou vector scoring in dispatch (M3)', () => {
     // vector 1.0 (identical to centroid) → hybrid 0.5*0.825 + 0.5*1 = 0.9125
     expect(result.results![0].rule).toBeCloseTo(0.825, 6)
     expect(result.results![0].vector).toBeCloseTo(1, 6)
-    expect(result.results![0].final).toBeCloseTo(0.9125, 6)
+    // v2 hybrid formula: max(0.92*1, 0.45*0.825 + 0.55*1) = 0.92125
+    expect(result.results![0].final).toBeCloseTo(0.92125, 6)
     expect(result.results![0].decision).toBe('bookmark')
     expect((result as { vectorAvailable?: boolean }).vectorAvailable).toBe(true)
   })
