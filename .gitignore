@@ -34,3 +34,12 @@ __pycache__/
 *.pyc
 .venv/
 
+# Local private workspace notes & exported bookmark backups
+HANDOFF.md
+SOP.md
+project-meta.json
+知识库目录.md
+*_backup*.json
+cleanup_queue_by_account.json
+x-toolkit-full-backup-*.json
+

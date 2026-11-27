@@ -269,6 +269,20 @@ export function ReaderDrawer({
     setLastNotionUrl('')
   }, [post?.tweet_id])
 
+  // 灯箱或引用弹窗打开时优先截获 Esc 仅关闭当前浮层，避免误关底下的阅读抽屉并丢失草稿
+  useEffect(() => {
+    if (!lightboxUrl && !quoteModalOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      if (lightboxUrl) setLightboxUrl(null)
+      else if (quoteModalOpen) setQuoteModalOpen(false)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [lightboxUrl, quoteModalOpen])
+
   if (!post) return null
 
   const openQuoteComposer = (selectedSnippet?: string) => {

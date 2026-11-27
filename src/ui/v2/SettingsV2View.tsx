@@ -443,8 +443,8 @@ export function SettingsV2View({
 
       {section === 'data' && (
         <div className="v2-legacy-wrap space-y-4">
-          <div className="rounded-xl border px-4 py-3 text-xs" style={{ background: 'var(--accent-soft)', borderColor: 'var(--border)' }}>
-            <strong>提示：</strong>要把 Phase 2 瘦身后的 <strong>22.42 MB 精选热库</strong>（<code>data_sandbox/out/hot_library_backup.json</code>）导入扩展，直接点击下方「从备份恢复」选择该文件即可一步替换，10 大 Notion 领域文件夹与形态标签会自动就位！
+          <div className="rounded-xl border px-4 py-3 text-xs leading-relaxed" style={{ background: 'var(--accent-soft)', borderColor: 'var(--border)' }}>
+            <strong>提示：</strong>「从备份恢复」采用<strong>整库替换</strong>模式（确认前会自动为你下载一份本机安全备份）。如需保留全部书签并按领域分层，请导入全量分层备份 <code>full_layered_backup.json</code>；如仅导入精选热库 <code>hot_library_backup.json</code>（约 63 MB），请先在「待清理队列」导入冷库墓碑以防增量同步回灌。
           </div>
           <FullBackupPanel
             onNotify={onNotify}

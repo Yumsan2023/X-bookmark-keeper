@@ -362,6 +362,34 @@ export async function sampleBookmarks(
     }));
 }
 
+// ---------------- 增量索引脏队列（确保编辑旧帖标签/文件夹/笔记也能毫秒级同步到 MiniSearch） ----------------
+
+const DIRTY_IDS_KEY = 'bk_dirty_post_ids'
+
+export async function recordDirtyPostIds(ids: string[]): Promise<void> {
+  if (!ids.length || typeof chrome === 'undefined' || !chrome.storage?.local) return
+  try {
+    const got = await chrome.storage.local.get(DIRTY_IDS_KEY)
+    const prev = Array.isArray(got[DIRTY_IDS_KEY]) ? (got[DIRTY_IDS_KEY] as string[]) : []
+    const merged = [...new Set([...prev, ...ids.filter(Boolean)])].slice(-500)
+    await chrome.storage.local.set({ [DIRTY_IDS_KEY]: merged })
+  } catch {
+    /* ignore */
+  }
+}
+
+export async function drainDirtyPostIds(): Promise<string[]> {
+  if (typeof chrome === 'undefined' || !chrome.storage?.local) return []
+  try {
+    const got = await chrome.storage.local.get(DIRTY_IDS_KEY)
+    const list = Array.isArray(got[DIRTY_IDS_KEY]) ? (got[DIRTY_IDS_KEY] as string[]) : []
+    if (list.length) await chrome.storage.local.set({ [DIRTY_IDS_KEY]: [] })
+    return list
+  } catch {
+    return []
+  }
+}
+
 // ---------------- 标签 ----------------
 
 export function normalizeTag(t: string): string {
@@ -379,6 +407,7 @@ export async function addTags(ids: string[], tags: string[]): Promise<void> {
         p.tags = [...new Set([...(p.tags ?? []), ...norm])]
       })
   })
+  await recordDirtyPostIds(ids)
 }
 
 /** One transaction: merge suggested tags onto each post. Does not remove existing tags. */
@@ -403,6 +432,7 @@ export async function removeTags(ids: string[], tags: string[]): Promise<void> {
     .modify((p) => {
       p.tags = (p.tags ?? []).filter((t) => !rm.has(t))
     })
+  await recordDirtyPostIds(ids)
 }
 
 export async function renameTag(from: string, to: string): Promise<number> {
@@ -447,6 +477,7 @@ export async function listTagNames(): Promise<string[]> {
 
 export async function setNote(id: string, note: string): Promise<void> {
   await db.posts.update(id, { note })
+  await recordDirtyPostIds([id])
 }
 
 // ---------------- 文件夹 ----------------
@@ -499,6 +530,7 @@ export async function deleteFolder(name: string): Promise<void> {
 export async function moveToFolder(ids: string[], folder: string): Promise<void> {
   if (folder) await createLocalFolderIfMissing(folder)
   await db.posts.where('tweet_id').anyOf(ids).modify({ folder })
+  await recordDirtyPostIds(ids)
 }
 
 async function createLocalFolderIfMissing(name: string) {

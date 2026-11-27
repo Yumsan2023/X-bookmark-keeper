@@ -4,7 +4,7 @@
  * - 有关键字: 优先用已就绪/持久化的 MiniSearch; 否则分批建索引并显示进度
  */
 import { db } from '@/db/db'
-import { getPosts, countPosts } from '@/db/posts'
+import { getPosts, countPosts, drainDirtyPostIds } from '@/db/posts'
 import { iteratePostsBatches, pagePostsNoText } from '@/db/query'
 import { STORAGE_KEYS } from '@/shared/types'
 import type { Post } from '@/shared/types'
@@ -91,27 +91,52 @@ export async function tryLoadPersistedIndex(engine: SearchEngine): Promise<boole
   }
 }
 
-/** 对已就绪的内存索引做毫秒级增量同步（仅更新近期新增/改动的条目），并异步写回持久化缓存 */
+let lastPersistAt = 0
+let deferredPersistTimer: ReturnType<typeof setTimeout> | undefined
+const PERSIST_THROTTLE_MS = 60_000
+
+/** 节流写回持久化索引（至少间隔 60s 或空闲落盘），避免同步翻页期间频繁序列化大索引造成卡顿 */
+function schedulePersistIndex(engine: SearchEngine) {
+  const now = Date.now()
+  if (now - lastPersistAt >= PERSIST_THROTTLE_MS) {
+    lastPersistAt = now
+    void persistIndex(engine).catch(() => {})
+    return
+  }
+  if (deferredPersistTimer) return
+  const delay = Math.max(5_000, PERSIST_THROTTLE_MS - (now - lastPersistAt))
+  deferredPersistTimer = setTimeout(() => {
+    deferredPersistTimer = undefined
+    if (engine.ready) {
+      lastPersistAt = Date.now()
+      void persistIndex(engine).catch(() => {})
+    }
+  }, delay)
+}
+
+/** 对已就绪的内存索引做毫秒级增量同步（含近期新增 + 旧帖被编辑标签/文件夹/笔记的 dirtyIds），并节流写回持久化缓存 */
 export async function patchEngineIncremental(engine: SearchEngine, sinceMs?: number): Promise<boolean> {
   if (!engine.ready) return false
   const row = await db.searchMeta.get(SEARCH_META_KEY)
-  const [dbVersion, postCount] = await Promise.all([getDbVersion(), countPosts()])
+  const [, postCount] = await Promise.all([getDbVersion(), countPosts()])
   if (row && Math.abs(postCount - row.postCount) > 500) {
     return false // 发生大规模导入/清空，需要全量重建
   }
   const cutoff = (sinceMs ?? row?.updatedAt ?? Date.now() - 300_000) - 60_000
-  const [recentSaved, newestBySort] = await Promise.all([
+  const dirtyIds = await drainDirtyPostIds()
+  const [recentSaved, newestBySort, dirtyPosts] = await Promise.all([
     db.posts.where('saved_at').aboveOrEqual(cutoff).limit(500).toArray(),
     db.posts.orderBy('sort_index').reverse().limit(120).toArray(),
+    dirtyIds.length ? getPosts(dirtyIds) : Promise.resolve([] as Post[]),
   ])
   const seen = new Set<string>()
-  for (const p of [...recentSaved, ...newestBySort]) {
+  for (const p of [...dirtyPosts, ...recentSaved, ...newestBySort]) {
     if (seen.has(p.tweet_id)) continue
     seen.add(p.tweet_id)
     engine.upsertIndexOnly(p)
   }
-  // 异步回写持久化元数据，下次打开扩展秒加载
-  void persistIndex(engine).catch(() => {})
+  // 节流回写持久化元数据，下次打开扩展秒加载且不阻塞同步翻页
+  schedulePersistIndex(engine)
   return true
 }
 

@@ -121,6 +121,11 @@ async function runTask(
   const t: TaskProgress = { id: idStr, kind, status: 'running', total: ids.length, done: 0, failed: 0, updated_at: Date.now(), ...extra }
   const ctl = { id: idStr, cancel: false, abort, task: t }
   current = ctl
+  // 所有后台长任务统一加 MV3 Service Worker 心跳保活，防止睡眠导致僵尸任务
+  const taskKeepAlive =
+    typeof chrome !== 'undefined' && chrome.runtime?.getPlatformInfo
+      ? setInterval(() => void chrome.runtime.getPlatformInfo(), 20_000)
+      : undefined
   await publish(t)
   let rateLimitStrikes = 0
   try {
@@ -177,6 +182,7 @@ async function runTask(
       t.error = (e as Error).message
     }
   } finally {
+    if (taskKeepAlive) clearInterval(taskKeepAlive)
     if (ctl.cancel && t.status === 'running') t.status = 'cancelled'
     current = null
     t.updated_at = Date.now()
@@ -441,10 +447,29 @@ async function bumpCleanupDaily(delta = 1): Promise<number> {
   return next
 }
 
+const CLEANUP_COOLDOWN_KEY = 'bk_cleanup_cooldown_until'
+
+async function readCleanupCooldownUntil(): Promise<number> {
+  try {
+    const got = await chrome.storage.local.get(CLEANUP_COOLDOWN_KEY)
+    return Number(got[CLEANUP_COOLDOWN_KEY] ?? 0) || 0
+  } catch {
+    return 0
+  }
+}
+
+async function writeCleanupCooldownUntil(until: number): Promise<void> {
+  try {
+    await chrome.storage.local.set({ [CLEANUP_COOLDOWN_KEY]: until })
+  } catch {
+    /* ignore */
+  }
+}
+
 /**
  * v2 安全清理队列执行器：
  * 1. 只执行归属于「当前已登录 X 账号」的 pending 条目（绝不误动其他账号）；
- * 2. 严格执行每日上限（settings.cleanupDailyCap，默认 50 条/天）；
+ * 2. 严格执行每日上限（settings.cleanupDailyCap，默认 50 条/天）与 429 持久化冷却保护；
  * 3. 随机 3–6 秒间隔 + 遇 2 次 429 自动熔断暂停；
  * 4. 成功后更新 cleanupQueue 状态、同步更新本地书签状态并写入冷库墓碑。
  */
@@ -453,6 +478,11 @@ export async function runCleanupQueue(
   opts: { limit?: number; removeLocal?: boolean } = {},
 ): Promise<CleanupRunResult> {
   if (current) throw new Error('已有任务在运行')
+  const cooldownUntil = await readCleanupCooldownUntil()
+  if (Date.now() < cooldownUntil) {
+    const waitMin = Math.max(1, Math.ceil((cooldownUntil - Date.now()) / 60_000))
+    throw new Error(`上次触发了 X 限流 (429)，安全冷却中，请约 ${waitMin} 分钟后再试`)
+  }
   let account = ''
   try {
     account = normalizeHandle((await client.getAccountSettings()).screen_name)
@@ -506,6 +536,10 @@ export async function runCleanupQueue(
     {
       gapMs: () => 3000 + Math.random() * 3000,
       maxRateLimitStrikes: 2,
+      onRateLimit: (_count, resetAt) => {
+        const until = Math.max(resetAt ?? 0, Date.now() + 15 * 60_000)
+        void writeCleanupCooldownUntil(until)
+      },
     },
   ).catch(() => {})
 

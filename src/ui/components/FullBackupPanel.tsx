@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { applyRestorePlan, backupFileName, collectFullBackup } from '@/backup/io'
 import { backupExceedsSizeLimit, inspectBackupText, serializeBackup, type BackupError, type BackupSummary, type RestorePlan, type SecretName } from '@/backup/full'
+import { countPosts } from '@/db/posts'
 import { UNKNOWN_ACCOUNT } from '@/shared/accounts'
 import { saveBlob } from '../util'
 import { useT, type Key } from '../i18n'
@@ -27,6 +28,7 @@ export function FullBackupPanel({ onNotify, onLibraryChange }: { onNotify?: (mes
   const [exporting, setExporting] = useState(false)
   const [err, setErr] = useState('')
   const [preview, setPreview] = useState<RestorePlan | null>(null)
+  const [localCount, setLocalCount] = useState<number>(0)
 
   const fail = (error: BackupError) => {
     setPreview(null)
@@ -70,6 +72,7 @@ export function FullBackupPanel({ onNotify, onLibraryChange }: { onNotify?: (mes
         fail(inspected.error)
         return
       }
+      setLocalCount(await countPosts().catch(() => 0))
       setPreview(inspected.plan)
     } catch (error) {
       setErr(error instanceof Error ? error.message : t('full_backup_err_bad'))
@@ -83,6 +86,15 @@ export function FullBackupPanel({ onNotify, onLibraryChange }: { onNotify?: (mes
     setBusy(true)
     setErr('')
     try {
+      // 防呆安全网：整库替换且本机已有数据时，先自动下载一份当前库的完整安全备份，防止误覆盖丢数据
+      if (preview.kind !== 'bookmarks-account' && localCount > 0) {
+        try {
+          const safetyFile = await collectFullBackup(false)
+          saveBlob(`safety-${backupFileName()}`, serializeBackup(safetyFile), 'application/json')
+        } catch {
+          /* 安全备份导出失败不阻断，但继续执行用户已确认的恢复 */
+        }
+      }
       await applyRestorePlan(preview)
       const message =
         preview.kind === 'bookmarks-account'
@@ -132,18 +144,20 @@ export function FullBackupPanel({ onNotify, onLibraryChange }: { onNotify?: (mes
         />
       </div>
       {err && <p className="err" role="alert">{err}</p>}
-      {preview && <Preview plan={preview} busy={busy} onCancel={() => setPreview(null)} onConfirm={() => void confirm()} />}
+      {preview && <Preview plan={preview} localCount={localCount} busy={busy} onCancel={() => setPreview(null)} onConfirm={() => void confirm()} />}
     </div>
   )
 }
 
 function Preview({
   plan,
+  localCount,
   busy,
   onCancel,
   onConfirm,
 }: {
   plan: RestorePlan
+  localCount: number
   busy: boolean
   onCancel: () => void
   onConfirm: () => void
@@ -153,6 +167,7 @@ function Preview({
   const legacy = plan.kind === 'bookmarks-legacy'
   const accountFile = plan.kind === 'bookmarks-account'
   const full = plan.kind === 'full'
+  const willDrop = !accountFile && localCount > summary.posts ? localCount - summary.posts : 0
   const accountLabel =
     plan.account === UNKNOWN_ACCOUNT ? t('account_unknown') : plan.account ? `@${plan.account}` : ''
   return (
@@ -184,6 +199,13 @@ function Preview({
         <strong>
           {accountFile ? t('account_export_warn_title') : legacy ? t('full_backup_warn_legacy_title') : t('full_backup_warn_title')}
         </strong>
+        {!accountFile && localCount > 0 && (
+          <p style={{ fontWeight: 600 }}>
+            本机当前 {localCount.toLocaleString()} 条 → 备份文件 {summary.posts.toLocaleString()} 条
+            {willDrop > 0 ? `（本次替换将移除 ${willDrop.toLocaleString()} 条本地记录）` : ''}
+            。点击确认后，系统会先自动下载一份本机安全备份再执行替换。
+          </p>
+        )}
         <p>
           {accountFile ? t('account_export_warn') : legacy ? t('full_backup_warn_legacy') : t('full_backup_warn_replace')}
         </p>

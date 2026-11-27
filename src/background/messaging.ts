@@ -10,6 +10,7 @@ import type { ForYouBookmarkItem, ForYouDestination, ForYouValidationRow } from 
 import { buildProfileJob, readForYouProfile, readForYouSettings, readLastForYouValidation, validateJob, type ForYouProfileProgress } from '@/foryou/runner'
 import { listNotionDatabases, pushQuoteToNotion } from '@/export/notion'
 import { db } from '@/db/db'
+import { countPosts } from '@/db/posts'
 import { getAllQueryIds, getQueryId, refreshQueryIds } from './queryids'
 import { SyncEngine } from './sync-engine'
 import { TimelineSyncEngine } from './timeline-engine'
@@ -181,11 +182,15 @@ export async function handleAutoSyncTrigger(hintScreenName?: string): Promise<{
   if (!decision.run || !decision.account) {
     return { triggered: false, reason: decision.reason, account: decision.account }
   }
+  // 护栏：空库绝不静默自动同步（防止新装用户打开 x.com 瞬间全量拉取触发风控）
+  if ((await countPosts()) === 0) {
+    return { triggered: false, reason: 'empty_library', account: decision.account }
+  }
   await rememberBookmarkAccount(decision.account, auth?.user_id)
   await markAutoSyncRan(decision.account)
   startKeepAlive()
   void engine
-    .start('incremental', { account: decision.account })
+    .start('incremental', { account: decision.account, maxPages: 3, skipFolders: true })
     .then(async (prog) => {
       if (prog.added > 0 && typeof chrome !== 'undefined' && chrome.action?.setBadgeText) {
         void chrome.action.setBadgeBackgroundColor?.({ color: '#10b981' })

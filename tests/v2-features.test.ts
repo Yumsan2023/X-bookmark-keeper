@@ -51,7 +51,7 @@ function makePost(over: Partial<Post> = {}): Post {
     sync_run: 'r1',
     url: 'https://x.com/alice/status/1001',
     source: 'bookmark',
-    accounts: ['justdoityum'],
+    accounts: ['alice_demo'],
     ...over,
   }
 }
@@ -63,11 +63,11 @@ describe('v2 auto-sync controller', () => {
       settings: { autoSyncOnXOpen: true, autoSyncCooldownMin: 20 },
       hasAuth: true,
       busy: false,
-      account: '@JustDoItYum',
-      lastMap: { justdoityum: now - 25 * 60_000 },
+      account: '@Alice_Demo',
+      lastMap: { alice_demo: now - 25 * 60_000 },
       now,
     })
-    expect(res).toEqual({ run: true, reason: 'ok', account: 'justdoityum' })
+    expect(res).toEqual({ run: true, reason: 'ok', account: 'alice_demo' })
   })
 
   it('respects per-account cooldown without blocking a different logged-in account', () => {
@@ -76,8 +76,8 @@ describe('v2 auto-sync controller', () => {
       settings: { autoSyncOnXOpen: true, autoSyncCooldownMin: 20 },
       hasAuth: true,
       busy: false,
-      account: 'justdoityum',
-      lastMap: { justdoityum: now - 5 * 60_000 },
+      account: 'alice_demo',
+      lastMap: { alice_demo: now - 5 * 60_000 },
       now,
     })
     expect(blocked.run).toBe(false)
@@ -87,12 +87,12 @@ describe('v2 auto-sync controller', () => {
       settings: { autoSyncOnXOpen: true, autoSyncCooldownMin: 20 },
       hasAuth: true,
       busy: false,
-      account: 'attnltd2026',
-      lastMap: { justdoityum: now - 5 * 60_000 },
+      account: 'bob_demo',
+      lastMap: { alice_demo: now - 5 * 60_000 },
       now,
     })
     expect(other.run).toBe(true)
-    expect(other.account).toBe('attnltd2026')
+    expect(other.account).toBe('bob_demo')
   })
 
   it('blocks when disabled, missing auth, or busy', () => {
@@ -138,7 +138,7 @@ describe('v2 cleanup queue & cold tombstones', () => {
       format: 'x-toolkit-cleanup-queue',
       version: 1,
       accounts: {
-        justdoityum: {
+        alice_demo: {
           count: 1,
           items: [
             {
@@ -147,7 +147,7 @@ describe('v2 cleanup queue & cold tombstones', () => {
               screen_name: 'spam',
               text_preview: 'giveaway',
               reason: 'rule:spam-giveaway',
-              accounts: ['justdoityum'],
+              accounts: ['alice_demo'],
             },
           ],
         },
@@ -161,7 +161,7 @@ describe('v2 cleanup queue & cold tombstones', () => {
     const sum = await getCleanupSummary()
     expect(sum.pending).toBe(1)
     expect(sum.tombstones).toBe(2)
-    expect(sum.byAccount[0].account).toBe('justdoityum')
+    expect(sum.byAccount[0].account).toBe('alice_demo')
 
     // Incremental sync with respectTombstones=true skips '8888' and marks it as seen!
     const up = await upsertParsed(
@@ -174,7 +174,7 @@ describe('v2 cleanup queue & cold tombstones', () => {
         },
       ],
       'run-1',
-      { source: 'bookmark', account: 'justdoityum', respectTombstones: true },
+      { source: 'bookmark', account: 'alice_demo', respectTombstones: true },
     )
     expect(up.added).toBe(1)
     expect(up.existingIds).toContain('8888')
@@ -360,7 +360,7 @@ describe('v2 X Article full-body parsing, quoted article repair detection & clea
         },
       }),
     }
-    const merged = mergePost(existing, shorterIncoming, 'run-next', { source: 'bookmark', account: 'justdoityum' })
+    const merged = mergePost(existing, shorterIncoming, 'run-next', { source: 'bookmark', account: 'alice_demo' })
     expect(merged.text).toBe(existing.text)
     expect(merged.quoted?.article_text).toBe(existing.quoted?.article_text)
 

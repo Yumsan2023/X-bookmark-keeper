@@ -213,9 +213,14 @@ export class XClient {
     return this.request('CreateBookmark', { method: 'POST', variables: { tweet_id: tweetId } })
   }
 
-  /** 取消 X 端书签 */
-  deleteBookmark(tweetId: string) {
-    return this.request('DeleteBookmark', { method: 'POST', variables: { tweet_id: tweetId } })
+  /** 取消 X 端书签（校验返回 data.tweet_bookmark_delete === 'Done'，防 HTTP 200 假成功） */
+  async deleteBookmark(tweetId: string) {
+    const json = await this.request<any>('DeleteBookmark', { method: 'POST', variables: { tweet_id: tweetId } })
+    if (json && typeof json === 'object' && ('data' in json || 'errors' in json) && json?.data?.tweet_bookmark_delete !== 'Done') {
+      const msg = json?.errors?.map((e: any) => e.message).join('; ') || 'X 未返回 DeleteBookmark Done 确认'
+      throw new XApiError('data', msg)
+    }
+    return json
   }
 
   /** 把书签放入 X 端文件夹 (best-effort, 未经验证) */

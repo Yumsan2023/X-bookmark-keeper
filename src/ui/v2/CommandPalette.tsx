@@ -44,6 +44,7 @@ export function CommandPalette({
 }: CommandPaletteProps) {
   const [query, setQuery] = useState('')
   const [hits, setHits] = useState<Post[]>([])
+  const [searching, setSearching] = useState(false)
   const [activeIdx, setActiveIdx] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -51,6 +52,7 @@ export function CommandPalette({
     if (!open) return
     setQuery('')
     setHits([])
+    setSearching(false)
     setActiveIdx(0)
     setTimeout(() => inputRef.current?.focus(), 20)
   }, [open])
@@ -60,16 +62,28 @@ export function CommandPalette({
     const q = query.trim()
     if (!q) {
       setHits([])
+      setSearching(false)
       return
     }
-    let alive = true
+    // 输入新词后立即清空上一轮结果并标记加载中，防止回车误打开旧查询的第 1 条
+    setHits([])
+    setSearching(true)
+    const signal = { aborted: false }
     const timer = setTimeout(() => {
-      void lib.search({ query: q, page: 0, pageSize: 6 }).then((res) => {
-        if (alive) setHits(res.hits.map((h) => h.post))
-      })
-    }, 120)
+      void lib
+        .search({ query: q, page: 0, pageSize: 6, signal })
+        .then((res) => {
+          if (!signal.aborted) {
+            setHits(res.hits.map((h) => h.post))
+            setSearching(false)
+          }
+        })
+        .catch(() => {
+          if (!signal.aborted) setSearching(false)
+        })
+    }, 150)
     return () => {
-      alive = false
+      signal.aborted = true
       clearTimeout(timer)
     }
   }, [open, query, lib])
@@ -139,7 +153,7 @@ export function CommandPalette({
                 setActiveIdx((i) => (totalItems ? (i - 1 + totalItems) % totalItems : 0))
               } else if (e.key === 'Enter') {
                 e.preventDefault()
-                if (e.metaKey || e.ctrlKey || (!totalItems && query.trim())) {
+                if (e.metaKey || e.ctrlKey || (!totalItems && query.trim()) || (searching && query.trim())) {
                   onSearchSubmit(query.trim())
                   onClose()
                 } else {
@@ -173,6 +187,12 @@ export function CommandPalette({
               <span>在主工作台全文搜索「{query.trim()}」</span>
               <ArrowRight className="h-3.5 w-3.5" />
             </button>
+          )}
+
+          {searching && query.trim() && (
+            <div className="px-3 py-2 text-xs" style={{ color: 'var(--muted)' }}>
+              正在搜索「{query.trim()}」...
+            </div>
           )}
 
           {hits.length > 0 && (

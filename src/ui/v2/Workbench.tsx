@@ -406,7 +406,13 @@ export function Workbench({ mode }: { mode: 'full' | 'side' }) {
       }
       const tag = (e.target as HTMLElement | null)?.tagName
       const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target as HTMLElement | null)?.isContentEditable
-      if (typing) return
+      if (typing) {
+        // 焦点在搜索框等输入框时按 Esc 先失焦（不直接丢弃外部弹窗，由弹窗自身接管 Esc）
+        if (e.key === 'Escape' && !paletteOpen) {
+          ;(e.target as HTMLElement | null)?.blur()
+        }
+        return
+      }
       if (e.key === '/') {
         e.preventDefault()
         searchInputRef.current?.focus()
@@ -1272,27 +1278,52 @@ export function Workbench({ mode }: { mode: 'full' | 'side' }) {
                 </div>
               ) : posts.length === 0 ? (
                 <div className="v2-card mx-auto mt-10 max-w-md p-10 text-center">
-                  <div className="text-base font-semibold">暂无匹配的书签</div>
+                  <div className="text-base font-semibold">
+                    {lib.totalCount === 0 ? '本地书签库为空' : '暂无匹配的书签'}
+                  </div>
                   <p className="mt-2 text-xs" style={{ color: 'var(--muted)' }}>
-                    你可以点击左侧「同步与补全」自动抓取最新 X 书签，或在「设置 → 热库恢复与备份」导入 Phase 2 瘦身后的 22MB 精选热库。
+                    {lib.totalCount === 0
+                      ? '你可以点击「去同步」抓取 X 书签，或在「设置 → 备份与恢复」导入已有备份。'
+                      : '当前搜索词或筛选条件下没有匹配记录，可调整关键词或清除筛选条件。'}
                   </p>
                   <div className="mt-4 flex justify-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setView('sync')}
-                      className="rounded-xl px-4 py-2 text-xs font-semibold"
-                      style={{ background: 'var(--primary-btn-bg)', color: 'var(--primary-btn-fg)' }}
-                    >
-                      去同步
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setView('settings')}
-                      className="rounded-xl border px-4 py-2 text-xs"
-                      style={{ borderColor: 'var(--border)' }}
-                    >
-                      导入精选热库
-                    </button>
+                    {lib.totalCount === 0 ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setView('sync')}
+                          className="rounded-xl px-4 py-2 text-xs font-semibold"
+                          style={{ background: 'var(--primary-btn-bg)', color: 'var(--primary-btn-fg)' }}
+                        >
+                          去同步
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setView('settings')}
+                          className="rounded-xl border px-4 py-2 text-xs"
+                          style={{ borderColor: 'var(--border)' }}
+                        >
+                          导入备份
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setQuery('')
+                          setActiveFolder('')
+                          setActiveAccount('')
+                          setActiveTag('')
+                          setActiveYear('')
+                          setMediaFilter('')
+                          setPage(0)
+                        }}
+                        className="rounded-xl border px-4 py-2 text-xs font-medium hover:border-[var(--accent)]"
+                        style={{ borderColor: 'var(--border)', color: 'var(--accent)' }}
+                      >
+                        清除全部筛选
+                      </button>
+                    )}
                   </div>
                 </div>
               ) : displayMode === 'table' ? (

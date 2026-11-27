@@ -175,18 +175,24 @@ export function useLibrary(): Library {
     const l = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
       if (area === 'local' && changes[STORAGE_KEYS.dbVersion]) {
         clearTimeout(timer.current)
-        // 节流 2s; 同步狂刷 dbVersion 时做轻量增量刷新，不重扫全库索引
+        // 节流 2.5s; 若同步正在高速翻页则只刷新总数，避免每页都全表重算标签/Stub 造成卡顿
         timer.current = setTimeout(() => {
           void (async () => {
+            const progRes = await chrome.storage.local.get(STORAGE_KEYS.progress).catch(() => ({} as Record<string, any>))
+            const syncRunning = progRes[STORAGE_KEYS.progress]?.status === 'running'
             invalidateStubCache()
             const totalCount = await countPosts()
+            if (syncRunning) {
+              setState((s) => ({ ...s, totalCount }))
+              return
+            }
             setState((s) => ({ ...s, totalCount, version: s.version + 1 }))
             const [folders, tags, unfiledCount] = await Promise.all([listFolders(), listTags(), countUnfiled()])
             setState((s) => ({ ...s, folders, tags, unfiledCount, version: s.version + 1 }))
             void warmStubCache().catch(() => {})
             void ensureIndex()
           })()
-        }, 2000)
+        }, 2500)
       }
     }
     chrome.storage.onChanged.addListener(l)

@@ -110,7 +110,9 @@ export class SyncEngine {
     }
   }
 
-  /** 带重试 / 限流退避的请求包装 */
+  /** 带重试 / 限流退避的请求包装（单次同步累计 2 次 429 自动熔断退出，防无限等待） */
+  private rateLimitStrikes = 0
+
   private async call<T>(fn: () => Promise<T>): Promise<T> {
     let attempt = 0
     for (;;) {
@@ -121,6 +123,13 @@ export class SyncEngine {
         if (e instanceof Cancelled) throw e
         if (!(e instanceof XApiError)) throw e
         if (e.code === 'rate_limit') {
+          this.rateLimitStrikes++
+          if (this.rateLimitStrikes >= 2) {
+            throw new XApiError('rate_limit', '连续触发限流 (HTTP 429) 达到上限，已自动暂停本次同步以保护账号', {
+              resetAt: e.resetAt,
+              status: 429,
+            })
+          }
           const until = Math.max(e.resetAt ?? 0, this.now() + 5000) + 2000
           this.deps.scheduleWake?.(until)
           await this.save({
@@ -154,11 +163,12 @@ export class SyncEngine {
     }
   }
 
-  async start(mode: SyncMode, opts?: { account?: string }): Promise<SyncProgress> {
+  async start(mode: SyncMode, opts?: { account?: string; maxPages?: number; skipFolders?: boolean }): Promise<SyncProgress> {
     if (this.running) return this.prog // 已在运行: 忽略重复调用, 返回当前进度
     this.running = true
     this.pauseRequested = false
     this.cancelRequested = false
+    this.rateLimitStrikes = 0
     const settings = await this.deps.getSettings()
     const saved = await this.deps.loadProgress()
     const now = this.now()
@@ -221,11 +231,11 @@ export class SyncEngine {
 
     try {
       if (this.prog.phase === 'bookmarks') {
-        await this.syncBookmarks(settings)
-        if (settings.syncFolders) await this.syncFolders(settings)
+        await this.syncBookmarks(settings, opts?.maxPages)
+        if (settings.syncFolders && !opts?.skipFolders) await this.syncFolders(settings)
         else await this.save({ phase: 'folders' })
       } else if (this.prog.phase === 'folders') {
-        await this.syncFolders(settings)
+        if (!opts?.skipFolders) await this.syncFolders(settings)
       }
       if (settings.fetchThreads) await this.syncThreads(settings)
       if (this.prog.mode === 'full' && settings.detectDeleted) await this.detectRemoved(detectionFailed)
@@ -255,10 +265,11 @@ export class SyncEngine {
   }
 
   // ---------------- 阶段 1: 书签主列表 ----------------
-  private async syncBookmarks(settings: Settings) {
+  private async syncBookmarks(settings: Settings, maxPages?: number) {
     const runId = this.prog.run_id
     const full = this.prog.mode === 'full'
     let cursor = this.prog.cursor
+    let pagesThisRun = 0
     await this.save({ phase: 'bookmarks' })
     for (;;) {
       await this.checkpoint()
@@ -267,13 +278,15 @@ export class SyncEngine {
       if (!page.recognized) throw new XApiError('data', '无法识别 Bookmarks 响应结构 (X 可能改版), 请查看 README 的 queryId/结构变动说明')
       const tweets = page.entries.filter((e): e is { kind: 'tweet'; post: ParsedPost } => e.kind === 'tweet').map((e) => e.post)
       const deleted = page.entries.filter((e) => e.kind === 'deleted').map((e) => (e as { tweet_id: string }).tweet_id)
+      // 全量与增量同步均始终尊重冷库墓碑，绝不将已归档/待清理冷库条目回灌进热库
       const r = await upsertParsed(tweets, runId, {
         source: 'bookmark',
         account: this.prog.account,
-        respectTombstones: !full,
+        respectTombstones: true,
       })
       if (deleted.length) await markTweetsDeleted(deleted, runId)
       this.seenInBookmarks += tweets.length + deleted.length
+      pagesThisRun++
       const nextCursor = page.cursor && page.cursor !== cursor ? page.cursor : undefined
       await this.save({
         pages: this.prog.pages + 1,
@@ -286,6 +299,7 @@ export class SyncEngine {
       await this.deps.onDbChanged?.()
       if (!tweets.length && !deleted.length) break // 空页 = 到底
       if (!full && r.existingIds.length > 0) break // 增量: 遇到已存在的书签即停
+      if (maxPages && pagesThisRun >= maxPages) break // 自动同步护栏: 单次最多翻 maxPages 页
       if (!nextCursor) break
       cursor = nextCursor
       await this.pageDelay(settings)
@@ -318,7 +332,9 @@ export class SyncEngine {
         await this.checkpoint()
         const res = await this.call(() => this.deps.api.getFolderTimeline(f.id, cursor))
         const page = parseTimelinePage(res)
-        if (!page.recognized) break
+        if (!page.recognized) {
+          throw new XApiError('data', `无法识别文件夹「${f.name}」的响应结构，已中止同步以防误清空本地归类`)
+        }
         const tweets = page.entries.filter((e): e is { kind: 'tweet'; post: ParsedPost } => e.kind === 'tweet').map((e) => e.post)
         const r = await upsertParsed(tweets, runId, { folder: f.name, keepSortIndex: true, source: 'bookmark', account: this.prog.account })
         tweets.forEach((t) => seen.add(t.tweet_id))
