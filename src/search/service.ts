@@ -11,6 +11,7 @@ import type { Post } from '@/shared/types'
 import {
   SearchEngine,
   matchesFilters,
+  matchesTermsExact,
   yieldToMain,
   type Filters,
   type Hit,
@@ -27,6 +28,8 @@ export const SEARCH_META_KEY = 'main'
 export interface PagedSearchInput extends SearchInput {
   page: number
   pageSize: number
+  /** 可选取消信号：用户输入新词时立刻中止旧搜索，彻底避免旧结果覆盖新结果 */
+  signal?: { aborted: boolean }
 }
 
 export interface PagedSearchResult extends SearchResult {
@@ -63,18 +66,53 @@ async function getDbVersion(): Promise<number> {
   }
 }
 
-/** 尝试从 IndexedDB 加载持久化索引 */
+/**
+ * 尝试从 IndexedDB 加载持久化索引：
+ * - 若版本和条数完全一致：0 成本直接加载；
+ * - 若仅发生小幅增量变动（如新同步几条推文、编辑标签/笔记、补全文章，差异 <= 500 条）：
+ *   加载旧索引后仅对近期变动记录做毫秒级增量 upsert，绝不重扫全库 6 万条！
+ */
 export async function tryLoadPersistedIndex(engine: SearchEngine): Promise<boolean> {
   const row = await db.searchMeta.get(SEARCH_META_KEY)
   if (!row?.indexJson) return false
   const [dbVersion, postCount] = await Promise.all([getDbVersion(), countPosts()])
-  if (row.dbVersion !== dbVersion || row.postCount !== postCount) return false
+  if (postCount === 0) return false
+  const exact = row.dbVersion === dbVersion && row.postCount === postCount
+  const canIncremental = !exact && Math.abs(postCount - row.postCount) <= 500 && row.postCount > 0
+  if (!exact && !canIncremental) return false
   try {
     await engine.loadFromJSON(row.indexJson)
+    if (canIncremental) {
+      await patchEngineIncremental(engine, row.updatedAt)
+    }
     return true
   } catch {
     return false
   }
+}
+
+/** 对已就绪的内存索引做毫秒级增量同步（仅更新近期新增/改动的条目），并异步写回持久化缓存 */
+export async function patchEngineIncremental(engine: SearchEngine, sinceMs?: number): Promise<boolean> {
+  if (!engine.ready) return false
+  const row = await db.searchMeta.get(SEARCH_META_KEY)
+  const [dbVersion, postCount] = await Promise.all([getDbVersion(), countPosts()])
+  if (row && Math.abs(postCount - row.postCount) > 500) {
+    return false // 发生大规模导入/清空，需要全量重建
+  }
+  const cutoff = (sinceMs ?? row?.updatedAt ?? Date.now() - 300_000) - 60_000
+  const [recentSaved, newestBySort] = await Promise.all([
+    db.posts.where('saved_at').aboveOrEqual(cutoff).limit(500).toArray(),
+    db.posts.orderBy('sort_index').reverse().limit(120).toArray(),
+  ])
+  const seen = new Set<string>()
+  for (const p of [...recentSaved, ...newestBySort]) {
+    if (seen.has(p.tweet_id)) continue
+    seen.add(p.tweet_id)
+    engine.upsertIndexOnly(p)
+  }
+  // 异步回写持久化元数据，下次打开扩展秒加载
+  void persistIndex(engine).catch(() => {})
+  return true
 }
 
 export async function persistIndex(engine: SearchEngine): Promise<void> {
@@ -146,16 +184,24 @@ async function searchWithText(
   const page = Math.max(0, input.page)
   const pageSize = Math.max(1, input.pageSize)
 
-  const hits: Hit[] = []
+  const exactHits: Hit[] = []
+  const fuzzyHits: Hit[] = []
   const seen = new Set<string>()
+  const signal = input.signal
 
   if (engine.ready && engine.documentCount > 0 && parsed.terms.length) {
     const scored = engine.searchIndex(parsed)
-    // 分块 bulkGet
+    // 分块 bulkGet，并对候选做真实关键词校验（优先精确/子串命中，绝不用模糊误匹配污染结果）
     const chunk = 500
     for (let i = 0; i < scored.length; i += chunk) {
+      if (signal?.aborted) {
+        return { hits: [], total: 0, parsed, highlightTerms }
+      }
       const part = scored.slice(i, i + chunk)
       const posts = await getPosts(part.map((s) => s.id))
+      if (signal?.aborted) {
+        return { hits: [], total: 0, parsed, highlightTerms }
+      }
       const byId = new Map(posts.map((p) => [p.tweet_id, p]))
       for (const s of part) {
         const p = byId.get(s.id)
@@ -163,27 +209,40 @@ async function searchWithText(
         if (parsed.phrases.length && !parsed.phrases.every((ph) => searchableText(p).normalize('NFKC').includes(ph.toLowerCase().normalize('NFKC'))))
           continue
         seen.add(p.tweet_id)
-        hits.push({ post: p, score: s.score, terms: s.terms })
+        if (matchesTermsExact(p, parsed)) {
+          exactHits.push({ post: p, score: s.score, terms: s.terms })
+        } else {
+          fuzzyHits.push({ post: p, score: s.score * 0.5, terms: s.terms })
+        }
       }
       if (i > 0 && i % 2000 === 0) await yieldToMain()
     }
   }
 
-  // 子串补充 / 仅短语 / 索引未覆盖: 分批扫库 (有上限保护, 让出主线程)
-  const needScan = !hits.length || parsed.phrases.length > 0 || !engine.ready
+  // 子串补充 / 仅短语 / 索引未就绪 / 索引精确命中为空时: 分批扫库 (可随时中止, 让出主线程)
+  const needScan = !exactHits.length || parsed.phrases.length > 0 || !engine.ready
   if (needScan && (parsed.terms.length || parsed.phrases.length)) {
     for await (const batch of iteratePostsBatches(INDEX_BATCH)) {
+      if (signal?.aborted) {
+        return { hits: [], total: 0, parsed, highlightTerms }
+      }
       for (const p of batch) {
         if (seen.has(p.tweet_id)) continue
         if (!passesText(p, parsed, filters)) continue
         if (!phraseAndNeedleOk(p, parsed)) continue
         seen.add(p.tweet_id)
-        hits.push({ post: p, score: 0.5, terms: [] })
+        exactHits.push({ post: p, score: 0.5, terms: [] })
       }
       await yieldToMain()
     }
   }
 
+  if (signal?.aborted) {
+    return { hits: [], total: 0, parsed, highlightTerms }
+  }
+
+  // 有精确/子串命中时只展示精确结果；仅当全库精确命中为 0 时才退回长词拼写容错结果
+  const hits = exactHits.length > 0 ? exactHits : fuzzyHits
   const effective: SortKey = sort === 'relevance' ? 'relevance' : sort
   hits.sort(hitComparator(effective))
   const start = page * pageSize

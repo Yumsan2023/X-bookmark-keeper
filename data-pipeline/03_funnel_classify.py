@@ -107,9 +107,23 @@ def infer_content_forms(row: sqlite3.Row, text_low: str) -> List[str]:
     forms: List[str] = []
     domains = set(json.loads(row["domains_json"] or "[]"))
     text_len = len((row["text"] or "").strip())
+    qtext_len = len((row["quoted_text"] or "").strip())
+    qtitle = (row["quoted_article_title"] or "").strip()
     thread_len = int(row["thread_len"] or 0)
     has_article = int(row["has_article"] or 0)
+    has_quote = int(row["has_quote"] or 0)
     has_image = int(row["has_image"] or 0)
+
+    is_x_article = bool(has_article or qtitle)
+    is_long_article = is_x_article or thread_len >= 2 or text_len >= 600
+    is_long_quote = bool(has_quote and (text_len >= 260 or qtext_len >= 500 or qtitle))
+
+    if is_long_article:
+        forms.append("长文章")
+    if is_x_article:
+        forms.append("X文章")
+    if is_long_quote:
+        forms.append("长Quote")
 
     if domains & {"github.com", "gitlab.com", "npmjs.com", "pypi.org", "huggingface.co"} or any(
         k in text_low for k in ("open source", "github.com", "开源", "免费工具", "chrome 扩展")
@@ -117,7 +131,7 @@ def infer_content_forms(row: sqlite3.Row, text_low: str) -> List[str]:
         forms.append("开源工具")
     if any(k in text_low for k in ("how to", "step by step", "tutorial", "guide", "playbook", "教程", "指南", "保姆级", "实操", "步骤")):
         forms.append("干货教程")
-    if has_article or thread_len >= 2 or text_len >= 700 or (row["quoted_article_title"] or "").strip():
+    if is_long_article and "深度长文" not in forms:
         forms.append("深度长文")
     if any(k in text_low for k in ("list of", "top 10", "top 20", "curated", "cheatsheet", "合集", "清单", "汇总", "书单", "资源")):
         forms.append("资料清单")
@@ -125,7 +139,7 @@ def infer_content_forms(row: sqlite3.Row, text_low: str) -> List[str]:
         forms.append("视觉素材")
     if not forms and text_len >= 120:
         forms.append("观点灵感")
-    return forms[:3]
+    return forms[:5]
 
 
 def estimate_tier(
@@ -151,36 +165,42 @@ def estimate_tier(
 
     bookmarks = int(row["bookmarks"] or 0)
     text_len = len((row["text"] or "").strip())
+    qtext_len = len((row["quoted_text"] or "").strip())
+    qtitle = (row["quoted_article_title"] or "").strip()
     thread_len = int(row["thread_len"] or 0)
     has_article = int(row["has_article"] or 0)
+    has_quote = int(row["has_quote"] or 0)
     created_ms = int(row["created_at"] or 0)
     domains = set(json.loads(row["domains_json"] or "[]"))
     has_code_or_paper = bool(domains & {"github.com", "arxiv.org", "huggingface.co"})
 
-    # Time-decay x Value-density strict curation (targets ~20-25MB hot library on 62k bookmarks)
-    # S-tier: X Articles, multi-tweet threads, or top-percentile evergreen/recent gems
-    if has_article or thread_len >= 2:
+    # S-tier: X Articles (direct or quoted), multi-tweet threads, deep long-form tweets, deep long quotes, or top gems
+    if has_article or qtitle or thread_len >= 2:
         return TIER_S, "rule:article-or-thread-s"
-    if created_ms >= TS_2026_MS and (bookmarks >= 1000 or text_len >= 1500):
+    if text_len >= 1000:
+        return TIER_S, "rule:long-article-s"
+    if has_quote and text_len >= 400:
+        return TIER_S, "rule:long-quote-s"
+    if created_ms >= TS_2026_MS and bookmarks >= 1000:
         return TIER_S, "rule:2026-gem-s"
-    if TS_2025_MS <= created_ms < TS_2026_MS and (bookmarks >= 1500 or text_len >= 2000):
+    if TS_2025_MS <= created_ms < TS_2026_MS and bookmarks >= 1500:
         return TIER_S, "rule:2025-gem-s"
     if created_ms < TS_2025_MS and bookmarks >= 2500:
         return TIER_S, "rule:evergreen-gem-s"
 
-    # A-tier: high-value reference kept in Hot Library
-    if created_ms >= TS_2026_MS and (
-        bookmarks >= 600 or text_len >= 1200 or (has_code_or_paper and bookmarks >= 200)
-    ):
+    # A-tier: medium-long posts, substantive long quotes, or high-value reference kept in Hot Library
+    if text_len >= 600:
+        return TIER_A, "rule:long-post-a"
+    if has_quote and (text_len >= 260 or (qtext_len >= 500 and text_len >= 60)):
+        return TIER_A, "rule:long-quote-a"
+    if created_ms >= TS_2026_MS and (bookmarks >= 600 or (has_code_or_paper and bookmarks >= 200)):
         return TIER_A, "rule:2026-useful-a"
-    if TS_2025_MS <= created_ms < TS_2026_MS and (
-        bookmarks >= 1000 or text_len >= 1500 or (has_code_or_paper and bookmarks >= 350)
-    ):
+    if TS_2025_MS <= created_ms < TS_2026_MS and (bookmarks >= 1000 or (has_code_or_paper and bookmarks >= 350)):
         return TIER_A, "rule:2025-useful-a"
     if created_ms < TS_2025_MS and bookmarks >= 2000:
         return TIER_A, "rule:evergreen-useful-a"
 
-    # B-tier: solid archive kept in local SQLite cold archive (never deleted)
+    # B-tier: solid archive kept in 冷库备查 (never deleted)
     return TIER_B, "rule:cold-b"
 
 
@@ -379,6 +399,7 @@ def run_stage_embed(
     limit: Optional[int],
     min_sim: float,
     hot_unclassified_only: bool = False,
+    rescreen_weak: bool = False,
     assign_best: bool = False,
 ) -> Dict[str, int]:
     t0 = time.time()
@@ -399,7 +420,24 @@ def run_stage_embed(
     form_norms = [l2_norm(v) for v in form_vecs]
 
     # 2. Fetch posts needing embedding (skip tier:D deleted/spam shells to save time)
-    if hot_unclassified_only:
+    if rescreen_weak:
+        sql = """
+            SELECT p.tweet_id, p.screen_name, p.text, p.quoted_text, p.quoted_article_title,
+                   p.domains_json, p.has_image, p.has_article, p.thread_len, p.likes, p.bookmarks,
+                   c.tier AS prev_tier, c.domain_folder AS prev_domain, c.confidence AS prev_conf,
+                   c.content_tags_json AS prev_forms,
+                   e.vector AS cached_vec
+            FROM posts p
+            JOIN classification c ON c.tweet_id = p.tweet_id
+            LEFT JOIN post_embeddings e ON e.tweet_id = p.tweet_id AND e.model = ?
+            WHERE c.tier != ?
+              AND (
+                c.domain_folder IS NULL OR c.domain_folder = ''
+                OR (c.tier IN (?, ?) AND c.stage = 'rules' AND c.confidence <= 0.45)
+              )
+        """
+        params: List[Any] = [model, TIER_D, TIER_S, TIER_A]
+    elif hot_unclassified_only:
         sql = """
             SELECT p.tweet_id, p.screen_name, p.text, p.quoted_text, p.quoted_article_title,
                    p.domains_json, p.has_image, p.has_article, p.thread_len, p.likes, p.bookmarks,
@@ -412,7 +450,7 @@ def run_stage_embed(
             WHERE c.tier IN (?, ?)
               AND (c.domain_folder IS NULL OR c.domain_folder = '')
         """
-        params: List[Any] = [model, TIER_S, TIER_A]
+        params = [model, TIER_S, TIER_A]
     else:
         sql = """
             SELECT p.tweet_id, p.screen_name, p.text, p.quoted_text, p.quoted_article_title,
@@ -486,7 +524,7 @@ def run_stage_embed(
             forms = list(existing_forms)
             if form_scores and form_scores[0][0] >= min_sim and form_scores[0][1] not in forms:
                 forms.append(form_scores[0][1])
-            forms = forms[:3]
+            forms = forms[:5]
 
             # Keep strong rule domain if confidence >= 0.80, else adopt vector domain if >= min_sim (or assign_best)
             prev_conf = float(r["prev_conf"] or 0.0)
@@ -513,8 +551,14 @@ def run_stage_embed(
             if chosen_dom:
                 domain_counts[chosen_dom] = domain_counts.get(chosen_dom, 0) + 1
 
+            # Preserve tier from rules stage (only promote tier:B when NOT rescreen_weak so cold archive stays disciplined)
             tier = r["prev_tier"] or TIER_A
-            if tier == TIER_B and chosen_dom in ("AI工具与工作流", "编程与技术开发", "投资理财与宏观", "效率与知识管理", "职业与副业营销", "认知心理与深度思考") and conf >= 0.65:
+            if (
+                not rescreen_weak
+                and tier == TIER_B
+                and chosen_dom in ("AI工具与工作流", "编程与技术开发", "投资理财与宏观", "效率与知识管理", "职业与副业营销", "认知心理与深度思考")
+                and conf >= 0.65
+            ):
                 tier = TIER_A
 
             cls_rows.append(
@@ -701,6 +745,11 @@ def main() -> int:
         help="In embed stage, only process tier:S / tier:A hot-library rows that have no domain_folder yet",
     )
     parser.add_argument(
+        "--rescreen-weak",
+        action="store_true",
+        help="In embed stage, classify ALL unclassified non-D rows + re-verify weak-rule (conf<=0.45) hot rows",
+    )
+    parser.add_argument(
         "--assign-best",
         action="store_true",
         help="In embed stage, assign the highest-similarity domain anchor even if below --min-sim",
@@ -728,6 +777,7 @@ def main() -> int:
                     args.limit,
                     args.min_sim,
                     hot_unclassified_only=args.hot_unclassified_only,
+                    rescreen_weak=args.rescreen_weak,
                     assign_best=args.assign_best,
                 )
             elif args.stage == "llm":

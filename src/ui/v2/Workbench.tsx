@@ -30,17 +30,24 @@ import {
   Square,
   SlidersHorizontal,
   X,
+  FileText,
+  AlignLeft,
+  MessageSquareQuote,
+  Calendar,
+  Loader2,
 } from 'lucide-react'
 import { APP_VERSION } from '@/backup/full'
 import { enqueuePostsForCleanup, getCleanupSummary } from '@/db/cleanup'
 import { addTags, listBookmarkAccounts, moveToFolder } from '@/db/posts'
+import { countYearsForQuery, type YearBucket } from '@/db/query'
 import { postsToCsv } from '@/export/csv'
 import { postsToSelfContainedHtml } from '@/export/html'
 import { postsToJson } from '@/export/json'
 import { postsToObsidianFiles } from '@/export/markdown'
 import { createZip } from '@/export/zip'
 import { groupByOriginal } from '@/library/quote-groups'
-import type { SortKey } from '@/search/engine'
+import type { Filters, SortKey } from '@/search/engine'
+import { parseQuery } from '@/search/query-parser'
 import { bumpDbVersion } from '@/shared/storage'
 import { STORAGE_KEYS, type LastFullSyncMeta, type Post, type Settings as SettingsType } from '@/shared/types'
 import { applyUiFontSize } from '@/shared/ui-font'
@@ -69,14 +76,30 @@ function folderColor(name: string): string {
 }
 import { CommandPalette } from './CommandPalette'
 import { ReaderDrawer } from './ReaderDrawer'
+import { HighlightText, findMatchedSnippet } from './HighlightText'
 import { DailyReviewView } from './DailyReviewView'
 import { CleanupQueueView } from './CleanupQueueView'
 import { SyncRepairView } from './SyncRepairView'
 import { TimelineLabView } from './TimelineLabView'
 import { SettingsV2View } from './SettingsV2View'
 
-type NavView = 'library' | 'daily' | 'unfiled' | 'gallery' | 'groups' | 'cleanup' | 'sync' | 'lab' | 'settings'
+type NavView =
+  | 'library'
+  | 'daily'
+  | 'xarticles'
+  | 'longpost'
+  | 'longquote'
+  | 'unfiled'
+  | 'gallery'
+  | 'groups'
+  | 'cleanup'
+  | 'sync'
+  | 'lab'
+  | 'settings'
 type DisplayMode = 'cards' | 'table' | 'gallery'
+
+const MAX_AUTOLOAD_ITEMS = 400
+const PAGE_SIZE_OPTIONS = [30, 50, 100, 200] as const
 
 function triggerDownload(filename: string, content: string | Uint8Array, mime: string) {
   const bytes = typeof content === 'string' ? content : new Uint8Array(content)
@@ -108,6 +131,15 @@ export function Workbench({ mode }: { mode: 'full' | 'side' }) {
   const [view, setView] = useState<NavView>(initialView)
   const [displayMode, setDisplayMode] = useState<DisplayMode>('cards')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(mode === 'side')
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    const saved = Number(localStorage.getItem('xt_v2_sidebar_w'))
+    return Number.isFinite(saved) && saved >= 180 && saved <= 360 ? saved : 224
+  })
+  const [readerWidth, setReaderWidth] = useState<number>(() => {
+    const saved = Number(localStorage.getItem('xt_v2_reader_w'))
+    return Number.isFinite(saved) && saved >= 320 && saved <= 1100 ? saved : 500
+  })
+  const [draggingPane, setDraggingPane] = useState<'sidebar' | 'reader' | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [reportOpen, setReportOpen] = useState(false)
   const [toast, setToast] = useState('')
@@ -118,9 +150,18 @@ export function Workbench({ mode }: { mode: 'full' | 'side' }) {
   const [activeFolder, setActiveFolder] = useState<string>('') // '' = all, '__none__' = unfiled
   const [activeAccount, setActiveAccount] = useState<string>('') // '' = all
   const [activeTag, setActiveTag] = useState<string>('')
+  const [activeYear, setActiveYear] = useState<string>('') // '' = all, '2026', '2025', '2024', 'older'
+  const [yearBuckets, setYearBuckets] = useState<YearBucket[]>([])
   const [mediaFilter, setMediaFilter] = useState<'' | 'image' | 'video' | 'link' | 'quote'>('')
   const [sort, setSort] = useState<SortKey>('saved_desc')
   const [page, setPage] = useState(0)
+  const [pageSize, setPageSize] = useState<number>(() => {
+    const saved = Number(localStorage.getItem('xt_v2_page_size'))
+    return (PAGE_SIZE_OPTIONS as readonly number[]).includes(saved) ? saved : 50
+  })
+  const [autoLoadMore, setAutoLoadMore] = useState<boolean>(() => localStorage.getItem('xt_v2_autoload') !== '0')
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [loadedExtraPages, setLoadedExtraPages] = useState(0)
   const [showFilters, setShowFilters] = useState(false)
   const [showExportMenu, setShowExportMenu] = useState(false)
   const [dropFolder, setDropFolder] = useState<string | null>(null)
@@ -138,7 +179,16 @@ export function Workbench({ mode }: { mode: 'full' | 'side' }) {
   const [cleanupPending, setCleanupPending] = useState(0)
 
   const searchInputRef = useRef<HTMLInputElement>(null)
-  const PAGE_SIZE = displayMode === 'table' ? 50 : 30
+  const mainScrollRef = useRef<HTMLElement>(null)
+  const loadMoreRef = useRef<HTMLDivElement>(null)
+  const feedReqIdRef = useRef(0)
+  const feedSignalRef = useRef({ aborted: false })
+  const PAGE_SIZE = pageSize
+
+  const highlightTerms = useMemo(() => {
+    const p = parseQuery(debouncedQuery)
+    return [...p.terms, ...p.phrases]
+  }, [debouncedQuery])
 
   const notify = useCallback((msg: string) => {
     setToast(msg)
@@ -162,7 +212,7 @@ export function Workbench({ mode }: { mode: 'full' | 'side' }) {
     const t = setTimeout(() => {
       setDebouncedQuery(query)
       setPage(0)
-    }, 180)
+    }, 240)
     return () => clearTimeout(t)
   }, [query])
 
@@ -184,50 +234,167 @@ export function Workbench({ mode }: { mode: 'full' | 'side' }) {
   }, [progress?.status])
 
   // Fetch paged bookmarks whenever query/filters/view/db version change
-  const isFeedView = view === 'library' || view === 'unfiled' || view === 'gallery' || view === 'groups'
+  const isFeedView =
+    view === 'library' ||
+    view === 'xarticles' ||
+    view === 'longpost' ||
+    view === 'longquote' ||
+    view === 'unfiled' ||
+    view === 'gallery' ||
+    view === 'groups'
+
+  const buildQuerySpec = useCallback((): { fullQuery: string; baseFilters: Filters; filters: Filters } => {
+    const folderClause =
+      view === 'unfiled' || activeFolder === '__none__'
+        ? 'folder:none'
+        : activeFolder
+          ? /\s/.test(activeFolder)
+            ? `folder:"${activeFolder}"`
+            : `folder:${activeFolder}`
+          : ''
+    const hasClause =
+      view === 'gallery'
+        ? 'has:media'
+        : mediaFilter
+          ? `has:${mediaFilter}`
+          : ''
+    const fullQuery = [debouncedQuery.trim(), folderClause, hasClause].filter(Boolean).join(' ')
+    const viewTags: string[] = []
+    const excludeTags: string[] = []
+    if (view === 'xarticles') viewTags.push('X文章')
+    if (view === 'longpost') {
+      viewTags.push('长文章')
+      excludeTags.push('X文章')
+    }
+    if (view === 'longquote') viewTags.push('长Quote')
+    if (activeTag && !viewTags.includes(activeTag)) viewTags.push(activeTag)
+
+    const baseFilters: Filters = {
+      ...(activeAccount ? { accounts: [activeAccount] } : {}),
+      ...(viewTags.length ? { tags: viewTags } : {}),
+      ...(excludeTags.length ? { excludeTags } : {}),
+    }
+
+    let since: number | undefined
+    let until: number | undefined
+    if (activeYear === 'older') {
+      since = 0
+      until = new Date(2024, 0, 1).getTime() - 1
+    } else if (/^\d{4}$/.test(activeYear)) {
+      const y = Number(activeYear)
+      since = new Date(y, 0, 1).getTime()
+      until = new Date(y + 1, 0, 1).getTime() - 1
+    }
+    const filters: Filters = {
+      ...baseFilters,
+      ...(since != null ? { since } : {}),
+      ...(until != null ? { until } : {}),
+    }
+    return { fullQuery, baseFilters, filters }
+  }, [view, activeFolder, mediaFilter, debouncedQuery, activeAccount, activeTag, activeYear])
+
   const loadFeed = useCallback(async () => {
     if (!isFeedView) return
+    // 中止上一次尚未完成的搜索，彻底防止旧的慢查询（例如刚输入单字母时）覆盖新的精确结果
+    const reqId = ++feedReqIdRef.current
+    feedSignalRef.current.aborted = true
+    const signal = { aborted: false }
+    feedSignalRef.current = signal
+
     setFetching(true)
+    setLoadedExtraPages(0)
     try {
-      const folderClause =
-        view === 'unfiled' || activeFolder === '__none__'
-          ? 'folder:none'
-          : activeFolder
-            ? /\s/.test(activeFolder)
-              ? `folder:"${activeFolder}"`
-              : `folder:${activeFolder}`
-            : ''
-      const hasClause =
-        view === 'gallery'
-          ? 'has:media'
-          : mediaFilter
-            ? `has:${mediaFilter}`
-            : ''
-      const fullQuery = [debouncedQuery.trim(), folderClause, hasClause].filter(Boolean).join(' ')
+      const { fullQuery, filters } = buildQuerySpec()
       const limit = view === 'groups' ? 1500 : PAGE_SIZE
       const res = await lib.search({
         query: fullQuery,
         sort,
-        page: view === 'groups' ? 1 : page + 1,
+        page: view === 'groups' ? 0 : page,
         pageSize: limit,
-        filters: {
-          ...(activeAccount ? { accounts: [activeAccount] } : {}),
-          ...(activeTag ? { tags: [activeTag] } : {}),
-        },
+        filters,
+        signal,
       })
+      if (signal.aborted || reqId !== feedReqIdRef.current) return
       const nextPosts = res.hits.map((h) => h.post)
       setPosts(nextPosts)
       setTotal(res.total)
-      // Keep selectedPost fresh if it was edited
       setSelectedPost((cur) => (cur ? nextPosts.find((p) => p.tweet_id === cur.tweet_id) ?? cur : null))
     } finally {
-      setFetching(false)
+      if (reqId === feedReqIdRef.current) {
+        setFetching(false)
+      }
     }
-  }, [isFeedView, view, activeFolder, mediaFilter, debouncedQuery, sort, page, PAGE_SIZE, activeAccount, activeTag, lib])
+  }, [isFeedView, buildQuerySpec, view, PAGE_SIZE, lib, sort, page])
+
+  const loadMoreFeed = useCallback(async () => {
+    if (!isFeedView || view === 'groups' || fetching || loadingMore) return
+    const nextPageIdx = page + loadedExtraPages + 1
+    if (nextPageIdx * PAGE_SIZE >= total) return
+    if (posts.length >= MAX_AUTOLOAD_ITEMS) return
+    const reqId = feedReqIdRef.current
+    const signal = feedSignalRef.current
+    setLoadingMore(true)
+    try {
+      const { fullQuery, filters } = buildQuerySpec()
+      const res = await lib.search({
+        query: fullQuery,
+        sort,
+        page: nextPageIdx,
+        pageSize: PAGE_SIZE,
+        filters,
+        signal,
+      })
+      if (signal.aborted || reqId !== feedReqIdRef.current) return
+      const more = res.hits.map((h) => h.post)
+      if (more.length) {
+        setPosts((prev) => {
+          const seen = new Set(prev.map((p) => p.tweet_id))
+          return [...prev, ...more.filter((p) => !seen.has(p.tweet_id))]
+        })
+        setLoadedExtraPages((n) => n + 1)
+      }
+      setTotal(res.total)
+    } finally {
+      setLoadingMore(false)
+    }
+  }, [isFeedView, view, fetching, loadingMore, page, loadedExtraPages, PAGE_SIZE, total, posts.length, buildQuerySpec, lib, sort])
 
   useEffect(() => {
     void loadFeed()
   }, [loadFeed, lib.version])
+
+  // Compute live year sub-classification counts for current view/folder/account/tag
+  useEffect(() => {
+    if (!isFeedView || view === 'groups') {
+      setYearBuckets([])
+      return
+    }
+    let alive = true
+    const { fullQuery, baseFilters } = buildQuerySpec()
+    void countYearsForQuery(parseQuery(fullQuery), baseFilters)
+      .then((buckets) => {
+        if (alive) setYearBuckets(buckets)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [isFeedView, view, buildQuerySpec, lib.version])
+
+  // IntersectionObserver for smooth Auto-Load Next Page
+  useEffect(() => {
+    if (!autoLoadMore || !isFeedView || view === 'groups') return
+    const el = loadMoreRef.current
+    if (!el) return
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) void loadMoreFeed()
+      },
+      { root: mainScrollRef.current, rootMargin: '260px' },
+    )
+    obs.observe(el)
+    return () => obs.disconnect()
+  }, [autoLoadMore, isFeedView, view, loadMoreFeed])
 
   // Global keyboard shortcuts (Cmd+K, J/K, Enter, X, Esc)
   useEffect(() => {
@@ -402,14 +569,51 @@ export function Workbench({ mode }: { mode: 'full' | 'side' }) {
     setPage(0)
   }
 
+  const startResize = (which: 'sidebar' | 'reader', startClientX: number) => {
+    const zoom = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom')) || 1
+    const startW = which === 'sidebar' ? sidebarWidth : readerWidth
+    const viewportCssW = window.innerWidth / zoom
+    let latestW = startW
+    setDraggingPane(which)
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'col-resize'
+
+    const onMove = (ev: MouseEvent) => {
+      const delta = (ev.clientX - startClientX) / zoom
+      if (which === 'sidebar') {
+        latestW = Math.round(Math.min(360, Math.max(180, startW + delta)))
+        setSidebarWidth(latestW)
+      } else {
+        const minCenter = 320
+        const leftUsed = sidebarCollapsed ? 0 : sidebarWidth
+        const maxReader = Math.max(360, Math.round(viewportCssW - leftUsed - minCenter))
+        latestW = Math.round(Math.min(maxReader, Math.max(320, startW - delta)))
+        setReaderWidth(latestW)
+      }
+    }
+
+    const onUp = () => {
+      setDraggingPane(null)
+      document.body.style.userSelect = ''
+      document.body.style.cursor = ''
+      localStorage.setItem(which === 'sidebar' ? 'xt_v2_sidebar_w' : 'xt_v2_reader_w', String(latestW))
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
   return (
     <div className={`v2-workbench-shell flex w-full overflow-hidden ${themeClass}`} style={{ background: 'var(--bg)', color: 'var(--fg)' }}>
       {/* LEFT SIDEBAR */}
       {!sidebarCollapsed && (
-        <aside
-          className="flex h-full min-h-0 w-56 shrink-0 flex-col overflow-hidden border-r"
-          style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
-        >
+        <>
+          <aside
+            className="flex h-full min-h-0 shrink-0 flex-col overflow-hidden border-r"
+            style={{ background: 'var(--surface)', borderColor: 'var(--border)', width: `${sidebarWidth}px` }}
+          >
           {/* Brand + Collapse */}
           <div className="flex shrink-0 items-center justify-between px-3 py-2">
             <div className="flex items-center gap-2">
@@ -484,14 +688,23 @@ export function Workbench({ mode }: { mode: 'full' | 'side' }) {
           <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
             {/* Smart Views */}
             <div className="space-y-0.5">
-              {[
-                { id: 'library' as const, label: '全部书签', icon: Bookmark, count: lib.totalCount, action: () => { setView('library'); setActiveFolder(''); setPage(0) } },
-                { id: 'daily' as const, label: '每日唤醒', icon: Sparkles, count: 5, accent: true, action: () => setView('daily') },
-                { id: 'unfiled' as const, label: '未整理收件箱', icon: Inbox, count: lib.unfiledCount, action: () => openFolderView('__none__') },
-                { id: 'gallery' as const, label: '媒体画廊', icon: ImageIcon, action: () => { setView('gallery'); setDisplayMode('gallery'); setPage(0) } },
-                { id: 'groups' as const, label: '引用归组 & 去重', icon: Layers, action: () => setView('groups') },
-                { id: 'cleanup' as const, label: '待清理队列', icon: Trash2, count: cleanupPending, warn: cleanupPending > 0, action: () => setView('cleanup') },
-              ].map((item) => {
+              {(() => {
+                const xArtCount = lib.tags.find((t) => t.tag === 'X文章')?.count ?? 0
+                const longAllCount = lib.tags.find((t) => t.tag === '长文章')?.count ?? 0
+                const longPostCount = Math.max(0, longAllCount - xArtCount)
+                const longQuoteCount = lib.tags.find((t) => t.tag === '长Quote')?.count ?? 0
+                return [
+                  { id: 'library' as const, label: '全部书签', icon: Bookmark, count: lib.totalCount, action: () => { setView('library'); setActiveFolder(''); setActiveYear(''); setPage(0) } },
+                  { id: 'daily' as const, label: '每日唤醒', icon: Sparkles, count: 5, accent: true, action: () => setView('daily') },
+                  { id: 'xarticles' as const, label: 'X 文章', icon: FileText, count: xArtCount, color: '#8b5cf6', action: () => { setView('xarticles'); setActiveFolder(''); setActiveYear(''); setPage(0) } },
+                  { id: 'longpost' as const, label: '长推文 (Long Post)', icon: AlignLeft, count: longPostCount, color: '#3b82f6', action: () => { setView('longpost'); setActiveFolder(''); setActiveYear(''); setPage(0) } },
+                  { id: 'longquote' as const, label: '深度长Quote', icon: MessageSquareQuote, count: longQuoteCount, color: '#06b6d4', action: () => { setView('longquote'); setActiveFolder(''); setActiveYear(''); setPage(0) } },
+                  { id: 'unfiled' as const, label: '未整理收件箱', icon: Inbox, count: lib.unfiledCount, action: () => { setActiveYear(''); openFolderView('__none__') } },
+                  { id: 'gallery' as const, label: '媒体画廊', icon: ImageIcon, action: () => { setView('gallery'); setDisplayMode('gallery'); setActiveFolder(''); setActiveYear(''); setPage(0) } },
+                  { id: 'groups' as const, label: '引用归组 & 去重', icon: Layers, action: () => { setView('groups'); if (activeFolder === '__none__') setActiveFolder(''); setPage(0) } },
+                  { id: 'cleanup' as const, label: '待清理队列', icon: Trash2, count: cleanupPending, warn: cleanupPending > 0, action: () => setView('cleanup') },
+                ]
+              })().map((item) => {
                 const Icon = item.icon
                 const active = view === item.id && (item.id !== 'library' || activeFolder === '')
                 return (
@@ -507,7 +720,7 @@ export function Workbench({ mode }: { mode: 'full' | 'side' }) {
                     }}
                   >
                     <span className="flex items-center gap-2 truncate">
-                      <Icon className="h-3.5 w-3.5 shrink-0" style={{ color: item.accent ? '#f59e0b' : item.warn ? 'var(--danger)' : 'var(--muted)' }} />
+                      <Icon className="h-3.5 w-3.5 shrink-0" style={{ color: item.color ?? (item.accent ? '#f59e0b' : item.warn ? 'var(--danger)' : 'var(--muted)') }} />
                       <span className="truncate">{item.label}</span>
                     </span>
                     {typeof item.count === 'number' && item.count > 0 && (
@@ -625,6 +838,32 @@ export function Workbench({ mode }: { mode: 'full' | 'side' }) {
             })}
           </div>
         </aside>
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          title="左右拖动调整侧边栏宽度（双击重置）"
+          onMouseDown={(e) => {
+            e.preventDefault()
+            startResize('sidebar', e.clientX)
+          }}
+          onDoubleClick={() => {
+            setSidebarWidth(224)
+            localStorage.setItem('xt_v2_sidebar_w', '224')
+          }}
+          className="group relative -mx-[3px] z-20 w-[6px] shrink-0 cursor-col-resize select-none"
+        >
+          <div
+            className="mx-auto h-full w-[2px] transition-colors"
+            style={{
+              background: draggingPane === 'sidebar' ? 'var(--accent)' : 'transparent',
+            }}
+          />
+          <div
+            className="pointer-events-none absolute inset-y-0 left-1/2 w-[2px] -translate-x-1/2 opacity-0 transition-opacity group-hover:opacity-100"
+            style={{ background: 'var(--accent)' }}
+          />
+        </div>
+        </>
       )}
 
       {/* CENTER WORKSPACE */}
@@ -657,6 +896,9 @@ export function Workbench({ mode }: { mode: 'full' | 'side' }) {
                   className="w-full rounded-xl border py-1.5 pl-9 pr-8 text-xs outline-none focus:border-[var(--accent)]"
                   style={{ background: 'var(--card)', borderColor: 'var(--border)', color: 'var(--fg)' }}
                 />
+                {fetching && query.trim() && (
+                  <Loader2 className="pointer-events-none absolute right-8 h-3.5 w-3.5 animate-spin" style={{ color: 'var(--accent)' }} />
+                )}
                 {query && (
                   <button
                     type="button"
@@ -829,7 +1071,14 @@ export function Workbench({ mode }: { mode: 'full' | 'side' }) {
                 : toast}
             </span>
             {task && task.status === 'running' && (
-              <button type="button" onClick={() => void bg({ type: 'sync/cancel' })} className="text-rose-400 hover:underline">
+              <button
+                type="button"
+                onClick={async () => {
+                  const r = await bg({ type: 'sync/cancel' })
+                  notify(r.ok ? '已停止后台任务' : `停止失败：${r.error || '未知错误'}`)
+                }}
+                className="text-rose-400 hover:underline"
+              >
                 取消任务
               </button>
             )}
@@ -837,7 +1086,7 @@ export function Workbench({ mode }: { mode: 'full' | 'side' }) {
         )}
 
         {/* MAIN SCROLLABLE CANVAS */}
-        <main className="min-h-0 flex-1 overflow-y-auto">
+        <main ref={mainScrollRef} className="min-h-0 flex-1 overflow-y-auto">
           {view === 'daily' && (
             <DailyReviewView
               notionReady={notionReady}
@@ -916,11 +1165,47 @@ export function Workbench({ mode }: { mode: 'full' | 'side' }) {
           )}
 
           {/* MAIN BOOKMARK FEED (CARDS / TABLE / GALLERY) */}
-          {(view === 'library' || view === 'unfiled' || view === 'gallery') && (
+          {(view === 'library' || view === 'xarticles' || view === 'longpost' || view === 'longquote' || view === 'unfiled' || view === 'gallery') && (
             <div className="px-4 py-2.5">
-              {/* Subheader stats + Select page */}
+              {/* Year Sub-Classification Bar */}
+              {yearBuckets.length > 1 && (
+                <div className="mb-2 flex flex-wrap items-center gap-1.5 text-[11px]">
+                  <span className="inline-flex items-center gap-1" style={{ color: 'var(--muted)' }}>
+                    <Calendar className="h-3 w-3" /> 按年份：
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => { setActiveYear(''); setPage(0) }}
+                    className="rounded-full border px-2 py-0.5 transition-colors"
+                    style={{
+                      background: activeYear === '' ? 'var(--accent-soft)' : 'transparent',
+                      borderColor: activeYear === '' ? 'var(--accent)' : 'var(--border)',
+                      color: activeYear === '' ? 'var(--accent)' : 'var(--muted)',
+                    }}
+                  >
+                    全部年份
+                  </button>
+                  {yearBuckets.map((b) => (
+                    <button
+                      key={b.key}
+                      type="button"
+                      onClick={() => { setActiveYear(activeYear === b.key ? '' : b.key); setPage(0) }}
+                      className="rounded-full border px-2 py-0.5 tabular-nums transition-colors"
+                      style={{
+                        background: activeYear === b.key ? 'var(--accent-soft)' : 'transparent',
+                        borderColor: activeYear === b.key ? 'var(--accent)' : 'var(--border)',
+                        color: activeYear === b.key ? 'var(--accent)' : 'var(--muted)',
+                      }}
+                    >
+                      {b.label} ({b.count.toLocaleString()})
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Subheader stats + Select page + Page Size & Auto-load */}
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs" style={{ color: 'var(--muted)' }}>
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-2.5">
                   <button
                     type="button"
                     onClick={() => {
@@ -934,16 +1219,48 @@ export function Workbench({ mode }: { mode: 'full' | 'side' }) {
                   </button>
                   <span>
                     共 <strong style={{ color: 'var(--fg)' }}>{total.toLocaleString()}</strong> 条
+                    {view === 'xarticles' ? ' · X文章' : view === 'longpost' ? ' · 长推文' : view === 'longquote' ? ' · 深度长Quote' : ''}
                     {activeFolder && activeFolder !== '__none__' ? ` · ${activeFolder}` : ''}
+                    {activeYear ? ` · ${activeYear === 'older' ? '2023及更早' : `${activeYear}年`}` : ''}
                     {activeAccount ? ` · @${activeAccount}` : ''}
                     {activeTag ? ` · #${activeTag}` : ''}
                   </span>
                 </div>
-                <div className="hidden items-center gap-2 text-[11px] lg:flex">
-                  <span>快捷键：</span>
-                  <kbd className="rounded border px-1" style={{ borderColor: 'var(--border)' }}>J/K</kbd> 切换
-                  <kbd className="rounded border px-1" style={{ borderColor: 'var(--border)' }}>Enter</kbd> 细读
-                  <kbd className="rounded border px-1" style={{ borderColor: 'var(--border)' }}>X</kbd> 待清理
+                <div className="flex flex-wrap items-center gap-2.5 text-[11px]">
+                  <select
+                    value={pageSize}
+                    onChange={(e) => {
+                      const next = Number(e.target.value) || 50
+                      setPageSize(next)
+                      setPage(0)
+                      localStorage.setItem('xt_v2_page_size', String(next))
+                    }}
+                    className="rounded-md border px-1.5 py-0.5 text-[11px]"
+                    style={{ background: 'var(--card)', borderColor: 'var(--border)', color: 'var(--fg)' }}
+                    title="每页显示条数"
+                  >
+                    {PAGE_SIZE_OPTIONS.map((n) => (
+                      <option key={n} value={n}>
+                        {n} 条/页
+                      </option>
+                    ))}
+                  </select>
+                  <label className="inline-flex cursor-pointer items-center gap-1" title="滚到底部自动追加下一页（最多连续 400 条防卡顿）">
+                    <input
+                      type="checkbox"
+                      checked={autoLoadMore}
+                      onChange={(e) => {
+                        setAutoLoadMore(e.target.checked)
+                        localStorage.setItem('xt_v2_autoload', e.target.checked ? '1' : '0')
+                      }}
+                    />
+                    <span>自动加载下一页</span>
+                  </label>
+                  <span className="hidden items-center gap-1 xl:inline-flex">
+                    <kbd className="rounded border px-1" style={{ borderColor: 'var(--border)' }}>J/K</kbd>
+                    <kbd className="rounded border px-1" style={{ borderColor: 'var(--border)' }}>Enter</kbd>
+                    <kbd className="rounded border px-1" style={{ borderColor: 'var(--border)' }}>X</kbd>
+                  </span>
                 </div>
               </div>
 
@@ -1010,8 +1327,12 @@ export function Workbench({ mode }: { mode: 'full' | 'side' }) {
                             <td className="p-2.5" onClick={(e) => { e.stopPropagation(); toggleCheck(post.tweet_id) }}>
                               <input type="checkbox" checked={checkedIds.has(post.tweet_id)} readOnly />
                             </td>
-                            <td className="truncate p-2.5 font-medium">@{post.screen_name}</td>
-                            <td className="max-w-md truncate p-2.5">{post.text || '(无文本)'}</td>
+                            <td className="truncate p-2.5 font-medium">
+                              @<HighlightText text={post.screen_name} terms={highlightTerms} />
+                            </td>
+                            <td className="max-w-md truncate p-2.5">
+                              {post.text ? <HighlightText text={post.text} terms={highlightTerms} /> : '(无文本)'}
+                            </td>
                             <td className="p-2.5">
                               {post.folder && (
                                 <span className="rounded-full px-2 py-0.5 text-[10px]" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}>
@@ -1052,9 +1373,11 @@ export function Workbench({ mode }: { mode: 'full' | 'side' }) {
                           )}
                         </div>
                         <div className="p-3">
-                          <div className="truncate text-xs font-medium">@{post.screen_name}</div>
+                          <div className="truncate text-xs font-medium">
+                            @<HighlightText text={post.screen_name} terms={highlightTerms} />
+                          </div>
                           <div className="mt-1 line-clamp-2 text-[11px]" style={{ color: 'var(--muted)' }}>
-                            {post.text}
+                            <HighlightText text={post.text} terms={highlightTerms} />
                           </div>
                         </div>
                       </div>
@@ -1091,8 +1414,12 @@ export function Workbench({ mode }: { mode: 'full' | 'side' }) {
                             />
                             <div className="min-w-0">
                               <div className="flex items-center gap-1.5 truncate text-xs">
-                                <span className="truncate font-semibold">{post.name || post.screen_name}</span>
-                                <span className="truncate" style={{ color: 'var(--muted)' }}>@{post.screen_name}</span>
+                                <span className="truncate font-semibold">
+                                  <HighlightText text={post.name || post.screen_name} terms={highlightTerms} />
+                                </span>
+                                <span className="truncate" style={{ color: 'var(--muted)' }}>
+                                  @<HighlightText text={post.screen_name} terms={highlightTerms} />
+                                </span>
                               </div>
                             </div>
                           </div>
@@ -1115,11 +1442,26 @@ export function Workbench({ mode }: { mode: 'full' | 'side' }) {
                         <div className="flex gap-2.5">
                           <div className="min-w-0 flex-1">
                             <div className="line-clamp-3 whitespace-pre-wrap break-words text-[13px] leading-snug">
-                              {post.text || <span style={{ color: 'var(--muted)' }}>(无正文)</span>}
+                              {post.text ? <HighlightText text={post.text} terms={highlightTerms} /> : <span style={{ color: 'var(--muted)' }}>(无正文)</span>}
                             </div>
+                            {(() => {
+                              const matchCtx = findMatchedSnippet(post, highlightTerms)
+                              if (!matchCtx) return null
+                              return (
+                                <div
+                                  className="mt-1.5 line-clamp-2 rounded-lg border px-2 py-1 text-[11px] leading-snug"
+                                  style={{ background: 'rgba(250, 204, 21, 0.08)', borderColor: 'rgba(234, 179, 8, 0.35)', color: 'var(--fg)' }}
+                                >
+                                  <span className="mr-1.5 font-semibold" style={{ color: 'var(--accent)' }}>
+                                    命中({matchCtx.source}):
+                                  </span>
+                                  <HighlightText text={matchCtx.snippet} terms={highlightTerms} />
+                                </div>
+                              )
+                            })()}
                             {post.quoted?.article_title && (
                               <div className="mt-1.5 truncate rounded-lg border px-2 py-0.5 text-[11px]" style={{ background: 'var(--card-2)', borderColor: 'var(--border)', color: 'var(--accent)' }}>
-                                📄 {post.quoted.article_title}
+                                📄 <HighlightText text={post.quoted.article_title} terms={highlightTerms} />
                               </div>
                             )}
                           </div>
@@ -1170,30 +1512,60 @@ export function Workbench({ mode }: { mode: 'full' | 'side' }) {
                 </div>
               )}
 
-              {/* Pagination */}
+              {/* Auto-load sentinel + Pagination */}
               {totalPages > 1 && (
-                <div className="mt-6 flex items-center justify-center gap-3 pb-16 text-xs">
-                  <button
-                    type="button"
-                    disabled={page <= 0}
-                    onClick={() => setPage((p) => Math.max(0, p - 1))}
-                    className="inline-flex items-center gap-1 rounded-lg border px-3 py-1.5 disabled:opacity-40"
-                    style={{ borderColor: 'var(--border)', background: 'var(--card)' }}
-                  >
-                    <ChevronLeft className="h-3.5 w-3.5" /> 上一页
-                  </button>
-                  <span className="tabular-nums" style={{ color: 'var(--muted)' }}>
-                    第 {page + 1} / {totalPages} 页
-                  </span>
-                  <button
-                    type="button"
-                    disabled={page >= totalPages - 1}
-                    onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-                    className="inline-flex items-center gap-1 rounded-lg border px-3 py-1.5 disabled:opacity-40"
-                    style={{ borderColor: 'var(--border)', background: 'var(--card)' }}
-                  >
-                    下一页 <ChevronRight className="h-3.5 w-3.5" />
-                  </button>
+                <div className="mt-5 flex flex-col items-center gap-2.5 pb-16 text-xs">
+                  {autoLoadMore && (page + loadedExtraPages + 1) * PAGE_SIZE < total && (
+                    <div ref={loadMoreRef} className="flex items-center justify-center py-2">
+                      {posts.length >= MAX_AUTOLOAD_ITEMS ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextStart = Math.min(totalPages - 1, page + loadedExtraPages + 1)
+                            setPage(nextStart)
+                            mainScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+                          }}
+                          className="rounded-lg border px-3.5 py-1.5 text-xs font-medium hover:border-[var(--accent)]"
+                          style={{ borderColor: 'var(--border)', background: 'var(--card)', color: 'var(--accent)' }}
+                        >
+                          已连续加载 {posts.length} 条 · 点击进入下一组（保持流畅）
+                        </button>
+                      ) : (
+                        <span className="text-[11px]" style={{ color: 'var(--muted)' }}>
+                          {loadingMore ? '正在自动加载下一页...' : `已显示 ${posts.length} / ${total.toLocaleString()} 条，继续下滑自动加载`}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  <div className="flex items-center justify-center gap-3">
+                    <button
+                      type="button"
+                      disabled={page <= 0}
+                      onClick={() => {
+                        setPage((p) => Math.max(0, p - 1))
+                        mainScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+                      }}
+                      className="inline-flex items-center gap-1 rounded-lg border px-3 py-1.5 disabled:opacity-40"
+                      style={{ borderColor: 'var(--border)', background: 'var(--card)' }}
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5" /> 上一页
+                    </button>
+                    <span className="tabular-nums" style={{ color: 'var(--muted)' }}>
+                      第 {page + 1}{loadedExtraPages > 0 ? `–${page + loadedExtraPages + 1}` : ''} / {totalPages} 页
+                    </span>
+                    <button
+                      type="button"
+                      disabled={page + loadedExtraPages >= totalPages - 1}
+                      onClick={() => {
+                        setPage((p) => Math.min(totalPages - 1, p + loadedExtraPages + 1))
+                        mainScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+                      }}
+                      className="inline-flex items-center gap-1 rounded-lg border px-3 py-1.5 disabled:opacity-40"
+                      style={{ borderColor: 'var(--border)', background: 'var(--card)' }}
+                    >
+                      下一页 <ChevronRight className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -1265,7 +1637,7 @@ export function Workbench({ mode }: { mode: 'full' | 'side' }) {
                 className="inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 hover:bg-[var(--hover)]"
                 style={{ borderColor: 'var(--border)' }}
               >
-                <Wrench className="h-3.5 w-3.5" /> 补抓 Thread
+                <Wrench className="h-3.5 w-3.5" /> 补全正文/文章
               </button>
               <button
                 type="button"
@@ -1288,19 +1660,51 @@ export function Workbench({ mode }: { mode: 'full' | 'side' }) {
         )}
       </div>
 
-      {/* RIGHT SLIDE-OVER READER DRAWER */}
+      {/* RIGHT SLIDE-OVER READER DRAWER (RESIZABLE) */}
       {selectedPost && (
-        <ReaderDrawer
-          post={selectedPost}
-          folders={lib.folders}
-          notionReady={notionReady}
-          onClose={() => setSelectedPost(null)}
-          onChanged={() => {
-            void lib.reload()
-            void loadFeed()
-          }}
-          onNotify={notify}
-        />
+        <>
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            title="左右拖动调整列表与阅读栏宽度（双击重置）"
+            onMouseDown={(e) => {
+              e.preventDefault()
+              startResize('reader', e.clientX)
+            }}
+            onDoubleClick={() => {
+              setReaderWidth(500)
+              localStorage.setItem('xt_v2_reader_w', '500')
+            }}
+            className="group relative -mx-[3px] z-20 w-[6px] shrink-0 cursor-col-resize select-none"
+          >
+            <div
+              className="mx-auto h-full w-[2px] transition-colors"
+              style={{
+                background: draggingPane === 'reader' ? 'var(--accent)' : 'transparent',
+              }}
+            />
+            <div
+              className="pointer-events-none absolute inset-y-0 left-1/2 w-[2px] -translate-x-1/2 opacity-0 transition-opacity group-hover:opacity-100"
+              style={{ background: 'var(--accent)' }}
+            />
+          </div>
+          <ReaderDrawer
+            post={selectedPost}
+            folders={lib.folders}
+            notionReady={notionReady}
+            notionDatabases={settings.notionDatabases ?? []}
+            defaultNotionDbId={settings.notionDatabaseId}
+            highlightTerms={highlightTerms}
+            width={readerWidth}
+            onClose={() => setSelectedPost(null)}
+            onPostUpdated={(updated) => setSelectedPost(updated)}
+            onChanged={() => {
+              void lib.reload()
+              void loadFeed()
+            }}
+            onNotify={notify}
+          />
+        </>
       )}
 
       {/* CMD+K COMMAND PALETTE */}

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { countPosts, getPosts, listFolders, listFoldersWithoutCounts, listTags } from '@/db/posts'
-import { countUnfiled } from '@/db/query'
+import { countUnfiled, invalidateStubCache, warmStubCache } from '@/db/query'
 import { SearchEngine } from '@/search/engine'
-import { buildIndexBatched, searchPage, tryLoadPersistedIndex, type PagedSearchInput, type PagedSearchResult } from '@/search/service'
+import { buildIndexBatched, patchEngineIncremental, searchPage, tryLoadPersistedIndex, type PagedSearchInput, type PagedSearchResult } from '@/search/service'
 import { getAuth, getSettings, mergeSettings } from '@/shared/storage'
 import { authorLinkSettings, authorMarkLookup } from '@/strike/lib/author-flags.js'
 import { DEFAULT_SETTINGS, STORAGE_KEYS, type BgRequest, type BgResponse, type Folder, type Post, type Settings, type SyncProgress, type TaskProgress } from '@/shared/types'
@@ -112,6 +112,16 @@ export function useLibrary(): Library {
     const signal = indexAbort.current
     const eng = engineRef.current
 
+    // 若内存索引已就绪，优先走毫秒级增量补丁，绝不在新同步/编辑时重扫全库！
+    if (eng.ready && eng.documentCount > 0) {
+      const patched = await patchEngineIncremental(eng)
+      if (signal.aborted || gen !== indexGen.current) return
+      if (patched) {
+        setState((s) => ({ ...s, indexing: false, indexProgress: null }))
+        return
+      }
+    }
+
     const loaded = await tryLoadPersistedIndex(eng)
     if (signal.aborted || gen !== indexGen.current) return
     if (loaded) {
@@ -137,6 +147,7 @@ export function useLibrary(): Library {
     if (busy.current) return
     busy.current = true
     try {
+      invalidateStubCache()
       // 1) 轻量元数据 — 先出界面
       const [totalCount, folderNames] = await Promise.all([countPosts(), listFoldersWithoutCounts()])
       setState((s) => ({
@@ -147,11 +158,12 @@ export function useLibrary(): Library {
         version: s.version + 1,
       }))
 
-      // 2) 异步补 count / tags / unfiled
+      // 2) 异步补 count / tags / unfiled + 预热轻量内存 Stub 缓存
       const [folders, tags, unfiledCount] = await Promise.all([listFolders(), listTags(), countUnfiled()])
       setState((s) => ({ ...s, folders, tags, unfiledCount, totalCount, version: s.version + 1 }))
+      void warmStubCache().catch(() => {})
 
-      // 3) 后台索引 (不阻塞打开)
+      // 3) 后台索引 (持久化 + 增量更新，仅首次导入后建一次)
       void ensureIndex()
     } finally {
       busy.current = false
@@ -163,17 +175,18 @@ export function useLibrary(): Library {
     const l = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
       if (area === 'local' && changes[STORAGE_KEYS.dbVersion]) {
         clearTimeout(timer.current)
-        // 节流 4s; 同步狂刷 dbVersion 时不反复全量重建
+        // 节流 2s; 同步狂刷 dbVersion 时做轻量增量刷新，不重扫全库索引
         timer.current = setTimeout(() => {
           void (async () => {
+            invalidateStubCache()
             const totalCount = await countPosts()
             setState((s) => ({ ...s, totalCount, version: s.version + 1 }))
-            // 文件夹/标签 count 轻量刷新; 索引延后重建
             const [folders, tags, unfiledCount] = await Promise.all([listFolders(), listTags(), countUnfiled()])
             setState((s) => ({ ...s, folders, tags, unfiledCount, version: s.version + 1 }))
+            void warmStubCache().catch(() => {})
             void ensureIndex()
           })()
-        }, 4000)
+        }, 2000)
       }
     }
     chrome.storage.onChanged.addListener(l)

@@ -43,7 +43,12 @@ export function postToMarkdown(p: Post, opts: MarkdownOptions = {}): string {
   if (opts.includeThread !== false && p.thread?.length) {
     parts.push(p.thread.map((t, i) => `**${i + 2}/${p.thread!.length + 1}** ${t.text}`).join('\n\n'))
   }
-  if (p.quoted) parts.push(quote(`${p.quoted.name} (@${p.quoted.screen_name}): ${p.quoted.text}`))
+  if (p.quoted) {
+    const qBody = p.quoted.article_text
+      ? `${p.quoted.article_title ? `**${p.quoted.article_title}**\n\n` : ''}${p.quoted.article_text}`
+      : p.quoted.text
+    parts.push(quote(`${p.quoted.name} (@${p.quoted.screen_name}): ${qBody}`))
+  }
   const media = (p.media ?? []).map((m) => (m.type === 'photo' ? `![${m.alt ?? ''}](${m.url})` : `[${m.type}](${m.video_url ?? m.url})`))
   if (media.length) parts.push(media.join('\n'))
   if ((p.tags ?? []).length) parts.push((p.tags ?? []).map((t) => `#${t.replace(/\s+/g, '-')}`).join(' '))

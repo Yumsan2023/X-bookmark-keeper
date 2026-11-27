@@ -1,5 +1,14 @@
 import { XApiError } from '@/api/errors'
-import { padSortIndex, parseThread, parseTimelinePage, snowflakeToMs, type ParsedPost } from '@/api/parser'
+import {
+  extractArticleContent,
+  extractTweetFromDetail,
+  needsDirectArticleRepair,
+  needsQuotedArticleRepair,
+  padSortIndex,
+  parseThread,
+  snowflakeToMs,
+  type ParsedPost,
+} from '@/api/parser'
 import { addColdTombstones, listCleanupQueue, updateCleanupStatus } from '@/db/cleanup'
 import { db } from '@/db/db'
 import { addTags, moveToFolder, releaseBookmark, upsertParsed } from '@/db/posts'
@@ -7,12 +16,12 @@ import { pushPostsToNotion } from '@/export/notion'
 import { FORYOU_AUTO_TAG, type ForYouBookmarkItem, type ForYouDestination } from '@/foryou/types'
 import { recordForYouDecision } from '@/foryou/decisions'
 import { normalizeHandle, partitionDeletes, UNKNOWN_ACCOUNT } from '@/shared/accounts'
-import { STORAGE_KEYS, type TaskProgress } from '@/shared/types'
+import { STORAGE_KEYS, type Post, type QuotedPost, type TaskProgress } from '@/shared/types'
 import { bumpDbVersion, getSettings } from '@/shared/storage'
 import { localDay, nextActionDelayMs } from '@/strike/lib/pure.js'
 import type { XClient } from '@/api/client'
 
-let current: { id: string; cancel: boolean } | null = null
+let current: { id: string; cancel: boolean; abort: AbortController; task: TaskProgress } | null = null
 
 async function publish(t: TaskProgress) {
   await chrome.storage.local.set({ [STORAGE_KEYS.task]: t })
@@ -21,8 +30,59 @@ async function publish(t: TaskProgress) {
 const rand = (min: number, max: number) => min + Math.random() * (max - min)
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
-export function cancelTask() {
-  if (current) current.cancel = true
+function cancellableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return sleep(ms)
+  if (signal.aborted) return Promise.resolve()
+  return new Promise<void>((resolve) => {
+    const onAbort = () => {
+      clearTimeout(timer)
+      resolve()
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+export async function cancelTask(): Promise<void> {
+  if (current) {
+    current.cancel = true
+    current.abort.abort()
+    current.task.status = 'cancelled'
+    current.task.updated_at = Date.now()
+    try {
+      await publish({ ...current.task })
+    } catch {
+      /* ignore */
+    }
+    return
+  }
+  // 兜底：Service Worker 被回收/重启后内存中已无 current，但 storage 仍残留 running 状态时，强制标为已取消
+  try {
+    const got = await chrome.storage.local.get(STORAGE_KEYS.task)
+    const stored = got[STORAGE_KEYS.task] as TaskProgress | undefined
+    if (stored && stored.status === 'running') {
+      await publish({ ...stored, status: 'cancelled', updated_at: Date.now() })
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Service Worker 启动恢复：清理因 SW 休眠而遗留的僵尸 running 任务状态 */
+export async function recoverInterruptedTask(): Promise<void> {
+  if (current) return
+  try {
+    const got = await chrome.storage.local.get(STORAGE_KEYS.task)
+    const stored = got[STORAGE_KEYS.task] as TaskProgress | undefined
+    if (stored && stored.status === 'running') {
+      await publish({ ...stored, status: 'cancelled', error: '后台进程已被浏览器回收，任务已自动中止', updated_at: Date.now() })
+    }
+  } catch {
+    /* ignore */
+  }
 }
 
 export interface RunTaskOptions {
@@ -55,10 +115,12 @@ async function runTask(
 ): Promise<TaskProgress> {
   if (current) throw new Error('已有任务在运行')
   const settings = await getSettings()
-  const doSleep = opts.sleepImpl ?? sleep
-  const ctl = { id: `${Date.now()}`, cancel: false }
+  const abort = new AbortController()
+  const doSleep = opts.sleepImpl ?? ((ms: number) => cancellableSleep(ms, abort.signal))
+  const idStr = `${Date.now()}`
+  const t: TaskProgress = { id: idStr, kind, status: 'running', total: ids.length, done: 0, failed: 0, updated_at: Date.now(), ...extra }
+  const ctl = { id: idStr, cancel: false, abort, task: t }
   current = ctl
-  const t: TaskProgress = { id: ctl.id, kind, status: 'running', total: ids.length, done: 0, failed: 0, updated_at: Date.now(), ...extra }
   await publish(t)
   let rateLimitStrikes = 0
   try {
@@ -70,6 +132,10 @@ async function runTask(
       try {
         await step(id)
       } catch (e) {
+        if (ctl.cancel) {
+          t.status = 'cancelled'
+          break
+        }
         if (e instanceof XApiError && (e.code === 'auth' || e.code === 'query_id')) {
           if (opts.continueOnAuthError) t.failed++
           else throw e
@@ -81,20 +147,37 @@ async function runTask(
           }
           const wait = Math.max(5000, (e.resetAt ?? Date.now() + 60_000) - Date.now())
           await doSleep(Math.min(wait, 15 * 60_000))
+          if (ctl.cancel) {
+            t.status = 'cancelled'
+            break
+          }
           ids.push(id) // 重试一次: 追加到队尾
           t.total++
         } else t.failed++
+      }
+      if (ctl.cancel) {
+        t.status = 'cancelled'
+        break
       }
       t.done++
       t.updated_at = Date.now()
       await publish(t)
       await doSleep(opts.gapMs ? opts.gapMs() : rand(settings.delayMinSec, settings.delayMaxSec) * 1000 * 0.5)
+      if (ctl.cancel) {
+        t.status = 'cancelled'
+        break
+      }
     }
-    if (t.status === 'running') t.status = 'done'
+    if (t.status === 'running') t.status = ctl.cancel ? 'cancelled' : 'done'
   } catch (e) {
-    t.status = 'error'
-    t.error = (e as Error).message
+    if (ctl.cancel) {
+      t.status = 'cancelled'
+    } else {
+      t.status = 'error'
+      t.error = (e as Error).message
+    }
   } finally {
+    if (ctl.cancel && t.status === 'running') t.status = 'cancelled'
     current = null
     t.updated_at = Date.now()
     await publish(t)
@@ -434,7 +517,7 @@ export async function runCleanupQueue(
   }
 }
 
-// ---------------- v2 残缺内容定向补全 (长文 / Thread / t.co 还原) ----------------
+// ---------------- v2 残缺内容定向补全 (截断正文 / X 文章全文 / 引用文章全文 / t.co 还原) ----------------
 
 const TCO_RE = /https?:\/\/t\.co\/[A-Za-z0-9]+/g
 
@@ -447,40 +530,242 @@ async function expandTcoUrl(url: string): Promise<string> {
   }
 }
 
-/** 针对截断长文、缺失 Thread、或含 t.co 短链的书签做定向补抓与更新。 */
-export function repairIncompletePosts(client: XClient, tweetIds: string[]) {
-  const unique = [...new Set(tweetIds)]
-  return runTask('repair', unique, async (id) => {
-    const existing = await db.posts.get(id)
-    if (!existing) return
-    const json = await client.getTweetDetail(id)
-    const thread = parseThread(json, id)
-    const page = parseTimelinePage(json)
-    const freshEntry = page.entries.find(
-      (e): e is { kind: 'tweet'; post: ParsedPost } => e.kind === 'tweet' && e.post.tweet_id === id,
-    )
-    let text = freshEntry && freshEntry.post.text.length > existing.text.length ? freshEntry.post.text : existing.text
-    let urls = freshEntry && freshEntry.post.urls.length >= existing.urls.length ? [...freshEntry.post.urls] : [...existing.urls]
+function needsOuterTweetRepair(p: Post): boolean {
+  if (needsDirectArticleRepair(p)) return true
+  const s = (p.text || '').trim()
+  if (!s) return true
+  if (s.length >= 220 && s.length <= 360 && (s.endsWith('…') || s.endsWith('...'))) return true
+  if (TCO_RE.test(s) || (p.urls ?? []).some((u) => u.includes('t.co/'))) return true
+  return false
+}
 
-    // Expand any remaining t.co short URLs
-    const tcoHits = [...new Set([...(text.match(TCO_RE) ?? []), ...urls.filter((u) => u.includes('t.co/'))])]
-    for (const shortUrl of tcoHits.slice(0, 6)) {
-      const expanded = await expandTcoUrl(shortUrl)
-      if (expanded !== shortUrl) {
-        text = text.split(shortUrl).join(expanded)
-        urls = urls.map((u) => (u === shortUrl ? expanded : u))
+export interface RepairSingleResult {
+  tweet_id: string
+  updated: boolean
+  charsAdded: number
+  imagesAdded: number
+  articleFull: boolean
+  quotedArticleFull: boolean
+  message: string
+  post?: Post
+}
+
+function mergeMediaUnique(prev: Post['media'] | undefined, incoming: Post['media'] | undefined): Post['media'] {
+  const out = [...(prev ?? [])]
+  const seen = new Set(out.map((m) => m.url))
+  for (const m of incoming ?? []) {
+    if (m.url && !seen.has(m.url)) {
+      seen.add(m.url)
+      out.push(m)
+    }
+  }
+  return out
+}
+
+/**
+ * 单条书签的同步定向补全（同时被阅读抽屉单条按钮和批量补全队列复用）：
+ * - 不拉取评论区无关串推；
+ * - 补全缺失/截断正文、直接 X 文章全文 + 配图、被引用 X 文章全文 + 配图、以及残留 t.co 短链；
+ * - 返回精确结果摘要与更新后的 Post，供 UI 立即刷新并给出明确提示。
+ */
+export async function repairSinglePost(
+  client: XClient,
+  id: string,
+  opts: { force?: boolean } = {},
+): Promise<RepairSingleResult> {
+  const existing = await db.posts.get(id)
+  if (!existing) {
+    return {
+      tweet_id: id,
+      updated: false,
+      charsAdded: 0,
+      imagesAdded: 0,
+      articleFull: false,
+      quotedArticleFull: false,
+      message: '未在本地库中找到该书签',
+    }
+  }
+
+  const prevTextLen = (existing.text || '').length
+  const prevQuotedArtLen = (existing.quoted?.article_text || '').length
+  const prevImgCount = (existing.media?.length ?? 0) + (existing.quoted?.media?.length ?? 0)
+
+  let text = existing.text
+  let urls = [...(existing.urls ?? [])]
+  let media = [...(existing.media ?? [])]
+  let quoted: QuotedPost | undefined = existing.quoted ? { ...existing.quoted } : undefined
+  let hasArticle = existing.has_article
+  let articleTitle = existing.article_title
+  let articleFull = false
+  let quotedArticleFull = false
+
+  const hasQuotedArticle = !!(
+    quoted?.tweet_id &&
+    (quoted.article_id || quoted.article_title || /(?:x|twitter)\.com\/(?:i\/articles?\/|[^/]+\/article\/)/i.test(quoted.text || ''))
+  )
+  const shouldFetchQuoted = opts.force ? hasQuotedArticle : needsQuotedArticleRepair(quoted)
+  const onlyQuotedArticle = !opts.force && !needsOuterTweetRepair(existing) && shouldFetchQuoted
+
+  // 1. 抓取外层推文（截断正文 / 直接 X 文章全文 + 配图 / 最新引用元数据）
+  if (!onlyQuotedArticle) {
+    const json = await client.getTweetDetail(id)
+    const hit = extractTweetFromDetail(json, id)
+    const fresh = hit?.post
+    if (fresh) {
+      const rawArt = hit?.raw?.article?.article_results?.result ?? hit?.raw?.article?.result
+      const extractedArt = extractArticleContent(rawArt)
+      if (extractedArt?.isFull) {
+        articleFull = true
+        if (extractedArt.title) articleTitle = extractedArt.title
+        media = mergeMediaUnique(media, extractedArt.images)
+      }
+      if (fresh.text.length > text.length || (articleFull && (fresh.text.length >= text.length || opts.force))) {
+        text = fresh.text
+      }
+      if (fresh.urls.length >= urls.length) urls = [...fresh.urls]
+      media = mergeMediaUnique(media, fresh.media)
+      if (fresh.has_article) hasArticle = 1
+      if (fresh.article_title) articleTitle = fresh.article_title
+      if (fresh.quoted) {
+        quoted = {
+          ...quoted,
+          ...fresh.quoted,
+          text: quoted && quoted.text.length > fresh.quoted.text.length ? quoted.text : fresh.quoted.text,
+          article_text:
+            !opts.force && quoted?.article_text && quoted.article_text.length > (fresh.quoted.article_text?.length ?? 0)
+              ? quoted.article_text
+              : fresh.quoted.article_text || quoted?.article_text,
+          article_title: fresh.quoted.article_title || quoted?.article_title,
+          article_id: fresh.quoted.article_id || quoted?.article_id,
+          media: mergeMediaUnique(quoted?.media, fresh.quoted.media),
+        }
+        if (quoted.article_text && quoted.article_text.length > prevQuotedArtLen) {
+          quotedArticleFull = true
+        }
       }
     }
+  }
 
-    await db.posts.update(id, {
-      text,
-      urls,
-      quoted: freshEntry?.post.quoted ?? existing.quoted,
-      media: freshEntry && freshEntry.post.media.length > existing.media.length ? freshEntry.post.media : existing.media,
-      thread: thread.length >= (existing.thread?.length ?? 0) ? thread : existing.thread,
-      thread_fetched_at: Date.now(),
-    })
-  })
+  // 2. 若该书签引用了一条 X 文章且尚未拿到完整文章正文（或用户手动强制刷新配图），定向抓取被引用推文的完整 X Article + 配图
+  const needQuotedStep = opts.force ? hasQuotedArticle : needsQuotedArticleRepair(quoted)
+  if (needQuotedStep && quoted?.tweet_id) {
+    if (!onlyQuotedArticle) await sleep(400)
+    try {
+      const qJson = await client.getTweetDetail(quoted.tweet_id)
+      const qHit = extractTweetFromDetail(qJson, quoted.tweet_id)
+      if (qHit) {
+        const rawArt = qHit.raw?.article?.article_results?.result ?? qHit.raw?.article?.result
+        const extracted = extractArticleContent(rawArt)
+        if (extracted?.body && (extracted.isFull || opts.force || extracted.body.length > (quoted.article_text?.length ?? 0))) {
+          quoted = {
+            ...quoted,
+            article_title: extracted.title || quoted.article_title,
+            article_text: extracted.body,
+            media: mergeMediaUnique(quoted.media, mergeMediaUnique(qHit.post.media, extracted.images)),
+          }
+          quotedArticleFull = true
+        } else if (qHit.post.text.length > quoted.text.length) {
+          quoted = {
+            ...quoted,
+            text: qHit.post.text,
+            ...(qHit.post.article_title ? { article_title: qHit.post.article_title } : {}),
+            ...(qHit.post.text.length >= 300 ? { article_text: qHit.post.text } : {}),
+            media: mergeMediaUnique(quoted.media, qHit.post.media),
+          }
+          quotedArticleFull = true
+        }
+      }
+    } catch (e) {
+      if (e instanceof XApiError && (e.code === 'auth' || e.code === 'rate_limit')) throw e
+      /* 被引用的原推文可能已删除/不可见，不阻断外层修复 */
+    }
+  }
+
+  // 3. 还原残留 t.co 短链
+  const tcoHits = [...new Set([...(text.match(TCO_RE) ?? []), ...urls.filter((u) => u.includes('t.co/'))])]
+  for (const shortUrl of tcoHits.slice(0, 6)) {
+    const expanded = await expandTcoUrl(shortUrl)
+    if (expanded !== shortUrl) {
+      text = text.split(shortUrl).join(expanded)
+      urls = urls.map((u) => (u === shortUrl ? expanded : u))
+    }
+  }
+
+  const patch: Partial<Post> = {
+    text,
+    urls,
+    media,
+    has_image: media.some((m) => m.type === 'photo') ? 1 : existing.has_image,
+    quoted,
+    article_checked_at: Date.now(),
+    ...(hasArticle ? { has_article: hasArticle } : {}),
+    ...(articleTitle ? { article_title: articleTitle } : {}),
+    ...(articleFull || quotedArticleFull ? { article_fetched_at: Date.now() } : {}),
+  }
+  await db.posts.update(id, patch)
+  const updatedPost = await db.posts.get(id)
+  await bumpDbVersion()
+
+  const newImgCount = (media.length ?? 0) + (quoted?.media?.length ?? 0)
+  const charsAdded = Math.max(0, text.length - prevTextLen) + Math.max(0, (quoted?.article_text?.length ?? 0) - prevQuotedArtLen)
+  const imagesAdded = Math.max(0, newImgCount - prevImgCount)
+  const updated = charsAdded > 0 || imagesAdded > 0 || articleFull || quotedArticleFull
+
+  let message: string
+  if (quotedArticleFull && articleFull) {
+    message = `已补全主文与引用文章全文（+${charsAdded.toLocaleString()} 字${imagesAdded ? ` · +${imagesAdded} 张图` : ''}）`
+  } else if (quotedArticleFull) {
+    message = `已抓取引用文章全文（+${charsAdded.toLocaleString()} 字${imagesAdded ? ` · +${imagesAdded} 张图` : ''}）`
+  } else if (articleFull) {
+    message = `已抓取 X 文章全文（+${charsAdded.toLocaleString()} 字${imagesAdded ? ` · +${imagesAdded} 张图` : ''}）`
+  } else if (charsAdded > 0 || imagesAdded > 0) {
+    message = `已补全内容（+${charsAdded.toLocaleString()} 字${imagesAdded ? ` · +${imagesAdded} 张图` : ''}）`
+  } else if (hasArticle === 1 || needsDirectArticleRepair(existing)) {
+    message = 'X 接口本次未返回该文章正文（可能为仅网页端渲染的文章卡片或原帖受限），可点「原文」查看'
+  } else {
+    message = '该条书签正文已是完整版，无需补充'
+  }
+
+  return {
+    tweet_id: id,
+    updated,
+    charsAdded,
+    imagesAdded,
+    articleFull,
+    quotedArticleFull,
+    message,
+    post: updatedPost,
+  }
+}
+
+/** 批量残缺内容与 X 文章全文补全任务 */
+export function repairIncompletePosts(client: XClient, tweetIds: string[]) {
+  const unique = [...new Set(tweetIds)]
+  return runTask(
+    'repair',
+    unique,
+    async (id) => {
+      await repairSinglePost(client, id)
+    },
+    {},
+    {
+      gapMs: () => rand(1600, 3200),
+      maxRateLimitStrikes: 2,
+    },
+  )
+}
+
+/** 新同步完成后，自动在后台补全本轮新入库的残缺 X 文章（含直接文章与引用文章，默认每轮最多 10 条防限流） */
+export async function autoRepairNewArticles(client: XClient, runId: string, maxPerRun = 10): Promise<number> {
+  if (!runId || current) return 0
+  const recent = await db.posts.where('sync_run').equals(runId).toArray()
+  const targets = recent
+    .filter((p) => p.status === 'active' && (needsDirectArticleRepair(p) || needsQuotedArticleRepair(p.quoted)))
+    .slice(0, maxPerRun)
+    .map((p) => p.tweet_id)
+  if (!targets.length) return 0
+  void repairIncompletePosts(client, targets).catch(() => {})
+  return targets.length
 }
 
 // ---------------- v2 一键推送精选至 Notion ----------------

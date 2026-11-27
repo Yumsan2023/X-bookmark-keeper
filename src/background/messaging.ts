@@ -3,11 +3,12 @@ import { OPERATIONS } from '@/api/endpoints'
 import { canonicalScreenName, screenNameFromAccountLabel, screenNameFromProfileHref } from '@/shared/accounts'
 import { getAuth, getProgress, getSettings, getTimelineProgress, saveProgress, saveTimelineProgress, bumpDbVersion, saveLastFullSync } from '@/shared/storage'
 import { STORAGE_KEYS, type BgRequest, type BgResponse } from '@/shared/types'
-import { bookmarkTweets, cancelTask, deleteBookmarks, fetchThreads, pushBookmarksToNotion, pushFolder, repairIncompletePosts, runCleanupQueue } from './actions'
+import { autoRepairNewArticles, bookmarkTweets, cancelTask, deleteBookmarks, fetchThreads, pushBookmarksToNotion, pushFolder, recoverInterruptedTask, repairIncompletePosts, repairSinglePost, runCleanupQueue } from './actions'
 import { decideAutoSync, markAutoSyncRan, readAutoSyncLastMap } from './auto-sync'
 import { canForYouBookmarkMoreToday, dispatch as dispatchStrike, getForYouRunBatch, noteForYouBookmarkResult, noteForYouRateLimited } from '@/strike/lib/store.js'
 import type { ForYouBookmarkItem, ForYouDestination, ForYouValidationRow } from '@/foryou/types'
 import { buildProfileJob, readForYouProfile, readForYouSettings, readLastForYouValidation, validateJob, type ForYouProfileProgress } from '@/foryou/runner'
+import { listNotionDatabases, pushQuoteToNotion } from '@/export/notion'
 import { db } from '@/db/db'
 import { getAllQueryIds, getQueryId, refreshQueryIds } from './queryids'
 import { SyncEngine } from './sync-engine'
@@ -137,13 +138,21 @@ export async function startSync(mode: 'incremental' | 'full' | 'resume', account
   const name = canonicalScreenName(account)
   if (name) await rememberBookmarkAccount(name)
   startKeepAlive()
-  void engine.start(mode, name ? { account: name } : undefined).finally(stopKeepAlive)
+  void engine
+    .start(mode, name ? { account: name } : undefined)
+    .then(async (prog) => {
+      const settings = await getSettings()
+      if (settings.autoRepairArticles && prog.status === 'done' && prog.added > 0) {
+        await autoRepairNewArticles(client, prog.run_id, 10)
+      }
+    })
+    .finally(stopKeepAlive)
 }
 
 /**
  * v2 打开 x.com 自动识别登录账号并静默增量扫描：
  * 免手动选账号、免手动点同步；按账号冷却节流防风控；
- * 同步到新书签后在扩展图标短暂显示 +N 徽标。
+ * 同步到新书签后在扩展图标短暂显示 +N 徽标，并按设置自动补全残缺 X 文章全文。
  */
 export async function handleAutoSyncTrigger(hintScreenName?: string): Promise<{
   triggered: boolean
@@ -177,11 +186,14 @@ export async function handleAutoSyncTrigger(hintScreenName?: string): Promise<{
   startKeepAlive()
   void engine
     .start('incremental', { account: decision.account })
-    .then((prog) => {
+    .then(async (prog) => {
       if (prog.added > 0 && typeof chrome !== 'undefined' && chrome.action?.setBadgeText) {
         void chrome.action.setBadgeBackgroundColor?.({ color: '#10b981' })
         void chrome.action.setBadgeText({ text: `+${Math.min(prog.added, 99)}` })
         setTimeout(() => void chrome.action.setBadgeText({ text: '' }), 15_000)
+      }
+      if (settings.autoRepairArticles && prog.status === 'done' && prog.added > 0) {
+        await autoRepairNewArticles(client, prog.run_id, 10)
       }
     })
     .finally(stopKeepAlive)
@@ -366,7 +378,7 @@ export async function getForYouDecisions() {
   return db.foryouDecisions.orderBy('at').reverse().limit(100).toArray()
 }
 
-/** service worker 重启后: 上次未结束的同步标记为暂停, 允许用户断点续传 */
+/** service worker 重启后: 上次未结束的同步标记为暂停, 残留后台任务标为已中止 */
 export async function recoverInterrupted() {
   const p = await getProgress()
   if (p && (p.status === 'running' || p.status === 'waiting') && !engine.isRunning) {
@@ -376,6 +388,7 @@ export async function recoverInterrupted() {
   if (tp && (tp.status === 'running' || tp.status === 'waiting') && !timelineEngine.isRunning) {
     await saveTimelineProgress({ ...tp, status: 'paused', message: '后台被浏览器回收, 点击"继续"从断点恢复', updated_at: Date.now() })
   }
+  await recoverInterruptedTask()
 }
 
 export async function handleMessage(msg: BgRequest): Promise<BgResponse> {
@@ -397,9 +410,12 @@ export async function handleMessage(msg: BgRequest): Promise<BgResponse> {
         if (engine.isRunning) engine.cancel()
         else {
           const p = await getProgress()
-          if (p) await saveProgress({ ...p, status: 'cancelled', message: '已取消', updated_at: Date.now() })
+          if (p && (p.status === 'running' || p.status === 'waiting')) {
+            await saveProgress({ ...p, status: 'cancelled', message: '已取消', updated_at: Date.now() })
+          }
         }
-        cancelTask()
+        await cancelTask()
+        stopKeepAlive()
         return { ok: true }
       case 'sync/status':
         return { ok: true, data: { progress: await getProgress(), running: engine.isRunning } }
@@ -443,11 +459,50 @@ export async function handleMessage(msg: BgRequest): Promise<BgResponse> {
       case 'cleanup/run':
         return { ok: true, data: await runCleanupQueue(client, { limit: msg.limit, removeLocal: msg.removeLocal }) }
       case 'repair/incomplete':
-        void repairIncompletePosts(client, msg.tweetIds)
+        startKeepAlive()
+        void repairIncompletePosts(client, msg.tweetIds).catch(() => {}).finally(stopKeepAlive)
         return { ok: true }
+      case 'repair/single':
+        return { ok: true, data: await repairSinglePost(client, msg.tweetId, { force: true }) }
       case 'notion/push':
-        void pushBookmarksToNotion(msg.tweetIds)
+        startKeepAlive()
+        void pushBookmarksToNotion(msg.tweetIds).catch(() => {}).finally(stopKeepAlive)
         return { ok: true }
+      case 'notion/listDatabases': {
+        const s = await getSettings()
+        const token = (msg.token ?? s.notionToken ?? '').trim()
+        const dbs = await listNotionDatabases(token)
+        return { ok: true, data: dbs }
+      }
+      case 'notion/pushQuote': {
+        const s = await getSettings()
+        const post = await db.posts.get(msg.tweetId)
+        if (!post) return { ok: false, error: '未找到该条书签' }
+        const pushed = await pushQuoteToNotion({
+          token: s.notionToken,
+          databaseId: msg.databaseId || s.notionDatabaseId,
+          post,
+          quoteText: msg.quoteText,
+          annotation: msg.annotation,
+          includeFullPost: msg.includeFullPost,
+        })
+        let updatedPost = post
+        if (msg.saveLocalNote) {
+          const stamp = new Date().toISOString().slice(0, 10)
+          const snippet = [
+            `[${stamp}]`,
+            msg.quoteText.trim() ? `> ${msg.quoteText.trim().slice(0, 300)}` : '',
+            msg.annotation.trim(),
+          ]
+            .filter(Boolean)
+            .join('\n')
+          const nextNote = post.note?.trim() ? `${post.note.trim()}\n\n${snippet}` : snippet
+          await db.posts.update(post.tweet_id, { note: nextNote })
+          updatedPost = (await db.posts.get(post.tweet_id)) ?? { ...post, note: nextNote }
+          await bumpDbVersion()
+        }
+        return { ok: true, data: { ...pushed, post: updatedPost } }
+      }
       case 'account/current':
         return { ok: true, data: await resolveCurrentAccount() }
       case 'folder/push':

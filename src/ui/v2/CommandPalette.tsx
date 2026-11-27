@@ -64,7 +64,7 @@ export function CommandPalette({
     }
     let alive = true
     const timer = setTimeout(() => {
-      void lib.search({ query: q, page: 1, pageSize: 6 }).then((res) => {
+      void lib.search({ query: q, page: 0, pageSize: 6 }).then((res) => {
         if (alive) setHits(res.hits.map((h) => h.post))
       })
     }, 120)

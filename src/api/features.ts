@@ -55,9 +55,14 @@ export const USER_FEATURES: Record<string, boolean> = {
   subscriptions_feature_can_gift_premium: true,
 }
 
+export const BOOKMARK_FIELD_TOGGLES = {
+  withArticleRichContentState: true,
+  withArticlePlainText: true,
+}
+
 export const TWEET_DETAIL_FIELD_TOGGLES = {
   withArticleRichContentState: true,
-  withArticlePlainText: false,
+  withArticlePlainText: true,
   withGrokAnalyze: false,
   withDisallowedReplyControls: false,
 }

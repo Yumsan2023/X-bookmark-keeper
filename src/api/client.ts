@@ -1,6 +1,13 @@
 import type { AuthInfo } from '@/shared/types'
 import { XApiError } from './errors'
-import { BOOKMARK_FEATURES, COMMON_FEATURES, TWEET_DETAIL_FIELD_TOGGLES, USER_FEATURES, parseMissingFeatures } from './features'
+import {
+  BOOKMARK_FEATURES,
+  BOOKMARK_FIELD_TOGGLES,
+  COMMON_FEATURES,
+  TWEET_DETAIL_FIELD_TOGGLES,
+  USER_FEATURES,
+  parseMissingFeatures,
+} from './features'
 import { buildUrl, type OperationName } from './endpoints'
 
 export interface RateLimitInfo {
@@ -153,6 +160,7 @@ export class XClient {
     return this.request('Bookmarks', {
       variables: { count, includePromotedContent: true, ...(cursor ? { cursor } : {}) },
       features: BOOKMARK_FEATURES,
+      fieldToggles: BOOKMARK_FIELD_TOGGLES,
     })
   }
 
@@ -171,6 +179,7 @@ export class XClient {
         ...(cursor ? { cursor } : {}),
       },
       features: BOOKMARK_FEATURES,
+      fieldToggles: BOOKMARK_FIELD_TOGGLES,
     })
   }
 

@@ -106,7 +106,7 @@ describe('full backup file', () => {
   it('matches the extension version', () => {
     const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }
     const manifest = JSON.parse(readFileSync(new URL('../public/manifest.json', import.meta.url), 'utf8')) as { version: string }
-    expect(APP_VERSION).toBe('2.0.0')
+    expect(APP_VERSION).toBe('2.1.0')
     expect(pkg.version).toBe(APP_VERSION)
     expect(manifest.version).toBe(APP_VERSION)
   })

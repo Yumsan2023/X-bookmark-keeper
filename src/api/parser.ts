@@ -118,7 +118,218 @@ export function expandText(
   return { text, urls }
 }
 
-function extractText(tweet: AnyObj): { text: string; urls: string[] } {
+export interface ExtractedArticle {
+  title: string
+  body: string
+  isFull: boolean
+  images: MediaItem[]
+}
+
+function collectArticleMedia(article: AnyObj): {
+  coverUrl: string
+  mediaLookup: Map<string, string>
+  images: MediaItem[]
+} {
+  const images: MediaItem[] = []
+  const seenUrls = new Set<string>()
+  const addImage = (url: string, alt = '', width?: number, height?: number) => {
+    const clean = String(url || '').trim()
+    if (!clean || seenUrls.has(clean)) return
+    seenUrls.add(clean)
+    images.push({
+      type: 'photo',
+      url: clean,
+      ...(alt ? { alt } : {}),
+      ...(width ? { width } : {}),
+      ...(height ? { height } : {}),
+    })
+  }
+
+  const coverInfo = article.cover_media?.media_info ?? article.cover_media
+  const coverUrl = String(
+    coverInfo?.original_img_url ?? coverInfo?.url ?? article.cover_media?.media_url_https ?? '',
+  ).trim()
+  if (coverUrl) {
+    addImage(coverUrl, typeof article.title === 'string' ? article.title : '', coverInfo?.original_img_width, coverInfo?.original_img_height)
+  }
+
+  const mediaLookup = new Map<string, string>()
+  const mediaEntities = Array.isArray(article.media_entities) ? article.media_entities : []
+  for (const me of mediaEntities) {
+    const mid = String(me?.media_id ?? me?.id ?? '')
+    const info = me?.media_info ?? me
+    const murl = String(info?.original_img_url ?? info?.url ?? me?.media_url_https ?? '').trim()
+    if (mid && murl) mediaLookup.set(mid, murl)
+    if (murl) {
+      addImage(murl, String(me?.ext_alt_text ?? ''), info?.original_img_width, info?.original_img_height)
+    }
+  }
+  return { coverUrl, mediaLookup, images }
+}
+
+function parseContentState(raw: unknown): AnyObj | null {
+  if (!raw) return null
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw)
+      return parsed && typeof parsed === 'object' ? (parsed as AnyObj) : null
+    } catch {
+      return null
+    }
+  }
+  return typeof raw === 'object' ? (raw as AnyObj) : null
+}
+
+/**
+ * 解析 X Article (`article.article_results.result`) 完整内容与配图：
+ * 1. 优先从 Draft.js `content_state.blocks` 还原 Markdown 段落/标题/引用/列表/代码块/内嵌图片与外链；
+ * 2. 次选 `plain_text` 纯文本全文；
+ * 3. 兜底 `preview_text` 摘要；
+ * 4. 同步提取 `cover_media` 与 `media_entities` 配图供阅读器与画廊展示。
+ */
+export function extractArticleContent(article: AnyObj | undefined | null): ExtractedArticle | null {
+  if (!article || typeof article !== 'object') return null
+  const title = typeof article.title === 'string' ? decodeHtmlEntities(article.title).trim() : ''
+  const { coverUrl, mediaLookup, images } = collectArticleMedia(article)
+  const contentState = parseContentState(article.content_state)
+
+  // Build entity lookup map (supports both array [{key, value}] and record { "0": {...} })
+  const entityLookup = new Map<string, AnyObj>()
+  const rawEntityMap = contentState?.entityMap
+  if (Array.isArray(rawEntityMap)) {
+    for (const entry of rawEntityMap) {
+      if (entry && entry.key != null && entry.value) entityLookup.set(String(entry.key), entry.value)
+    }
+  } else if (rawEntityMap && typeof rawEntityMap === 'object') {
+    for (const [k, v] of Object.entries(rawEntityMap)) {
+      if (v && typeof v === 'object') entityLookup.set(String(k), v as AnyObj)
+    }
+  }
+
+  const blocks = contentState?.blocks
+  if (Array.isArray(blocks) && blocks.length > 0) {
+    const rendered: string[] = []
+    const inlineImgUrls = new Set<string>()
+    if (coverUrl) {
+      rendered.push(`![${title || '封面图'}](${coverUrl})`)
+      inlineImgUrls.add(coverUrl)
+    }
+    let orderedIdx = 0
+    for (const b of blocks) {
+      if (!b || typeof b !== 'object') continue
+      const type = String(b.type || 'unstyled')
+      let text = typeof b.text === 'string' ? decodeHtmlEntities(b.text) : ''
+
+      const entityRanges = Array.isArray(b.entityRanges) ? b.entityRanges : []
+      if (type === 'atomic') {
+        orderedIdx = 0
+        for (const er of entityRanges) {
+          const ent = entityLookup.get(String(er?.key))
+          const etype = String(ent?.type || '').toUpperCase()
+          const data = ent?.data ?? {}
+          if (etype === 'MARKDOWN' && typeof data.markdown === 'string' && data.markdown.trim()) {
+            rendered.push(data.markdown.trim())
+          } else if (etype === 'LINK' && typeof data.url === 'string') {
+            rendered.push(data.url)
+          } else if (etype === 'MEDIA' || etype === 'IMAGE') {
+            const items = Array.isArray(data.mediaItems) ? data.mediaItems : []
+            let matchedAny = false
+            for (const mi of items) {
+              const mid = String(mi?.mediaId ?? mi?.media_id ?? '')
+              const u = mediaLookup.get(mid) || String(mi?.url ?? mi?.original_img_url ?? '')
+              if (u) {
+                rendered.push(`![${data.caption || ''}](${u})`)
+                inlineImgUrls.add(u)
+                matchedAny = true
+              }
+            }
+            if (!matchedAny && typeof data.url === 'string' && data.url) {
+              rendered.push(`![${data.caption || ''}](${data.url})`)
+              inlineImgUrls.add(data.url)
+            }
+            if (typeof data.caption === 'string' && data.caption.trim()) {
+              rendered.push(`*${data.caption.trim()}*`)
+            }
+          } else if (etype === 'TWEET' && data.tweetId) {
+            rendered.push(`https://x.com/i/status/${data.tweetId}`)
+          }
+        }
+        continue
+      }
+
+      if (type !== 'ordered-list-item') orderedIdx = 0
+
+      // Append link URLs if block has LINK entities not already embedded verbatim
+      const extraLinks: string[] = []
+      for (const er of entityRanges) {
+        const ent = entityLookup.get(String(er?.key))
+        const u = ent?.type === 'LINK' ? ent?.data?.url : undefined
+        if (typeof u === 'string' && u && !text.includes(u) && !extraLinks.includes(u)) {
+          extraLinks.push(u)
+        }
+      }
+      if (extraLinks.length && text.trim()) {
+        text = `${text} (${extraLinks.join(' ')})`
+      }
+
+      const trimmed = text.trim()
+      if (!trimmed) continue
+
+      if (type === 'header-one') rendered.push(`# ${trimmed}`)
+      else if (type === 'header-two') rendered.push(`## ${trimmed}`)
+      else if (type === 'header-three') rendered.push(`### ${trimmed}`)
+      else if (type === 'blockquote') rendered.push(`> ${trimmed}`)
+      else if (type === 'unordered-list-item') rendered.push(`- ${trimmed}`)
+      else if (type === 'ordered-list-item') {
+        orderedIdx += 1
+        rendered.push(`${orderedIdx}. ${trimmed}`)
+      } else if (type === 'code-block') {
+        rendered.push(`\`\`\`\n${text}\n\`\`\``)
+      } else {
+        rendered.push(trimmed)
+      }
+    }
+    // 兜底：若 media_entities 中还有未在 atomic block 里引用到的配图，附在文末防丢图
+    for (const img of images) {
+      if (!inlineImgUrls.has(img.url)) {
+        rendered.push(`![${img.alt || ''}](${img.url})`)
+      }
+    }
+    const body = rendered.join('\n\n').trim()
+    if (body) return { title, body, isFull: true, images }
+  }
+
+  const plain = typeof article.plain_text === 'string' ? decodeHtmlEntities(article.plain_text).trim() : ''
+  if (plain) {
+    const imgPrefix = coverUrl ? `![${title || '封面图'}](${coverUrl})\n\n` : ''
+    const extraImgs = images
+      .filter((img) => img.url !== coverUrl)
+      .map((img) => `![${img.alt || ''}](${img.url})`)
+      .join('\n\n')
+    const body = [imgPrefix + plain, extraImgs].filter(Boolean).join('\n\n').trim()
+    return { title, body, isFull: true, images }
+  }
+
+  const preview = typeof article.preview_text === 'string' ? decodeHtmlEntities(article.preview_text).trim() : ''
+  if (title || preview) return { title, body: preview, isFull: false, images }
+  return null
+}
+
+function findArticleNode(tweet: AnyObj): AnyObj | null {
+  const direct = tweet.article?.article_results?.result
+  if (direct && typeof direct === 'object') return direct
+  const nested = tweet.article?.result
+  if (nested && typeof nested === 'object') return nested
+  return null
+}
+
+function extractText(tweet: AnyObj): {
+  text: string
+  urls: string[]
+  articleTitle?: string
+  articleFull?: boolean
+  articleImages?: MediaItem[]
+} {
   const note = tweet.note_tweet?.note_tweet_results?.result
   let base: { text: string; urls: string[] }
   if (note?.text) {
@@ -130,11 +341,20 @@ function extractText(tweet: AnyObj): { text: string; urls: string[] } {
       tweet.legacy?.extended_entities?.media ?? tweet.legacy?.entities?.media,
     )
   }
-  // 文章 (Article) 推文: 正文为空时用标题 + 摘要
-  const article = tweet.article?.article_results?.result
-  if (article && (article.title || article.preview_text)) {
-    const extra = [article.title, article.preview_text].filter(Boolean).join('\n')
-    base.text = base.text ? `${base.text}\n\n${extra}` : extra
+  const article = findArticleNode(tweet)
+  const extracted = extractArticleContent(article)
+  if (extracted) {
+    const extra = [extracted.title, extracted.body].filter(Boolean).join('\n\n')
+    // 当推文本身只是裸 /i/article/ 链接且已拿到完整文章时，避免重复堆叠链接
+    const cleanBase = base.text.replace(/^https?:\/\/(?:x|twitter)\.com\/i\/articles?\/\d+\s*$/i, '').trim()
+    const merged = cleanBase ? `${cleanBase}\n\n${extra}` : extra
+    return {
+      text: merged,
+      urls: base.urls,
+      articleTitle: extracted.title || undefined,
+      articleFull: extracted.isFull,
+      articleImages: extracted.images,
+    }
   }
   return base
 }
@@ -153,18 +373,37 @@ function parseCreatedAt(tweet: AnyObj, id: string): number {
   return snowflakeToMs(id)
 }
 
+function mergeMediaLists(a: MediaItem[], b: MediaItem[] | undefined): MediaItem[] {
+  if (!b?.length) return a
+  const seen = new Set(a.map((m) => m.url))
+  const out = [...a]
+  for (const m of b) {
+    if (m.url && !seen.has(m.url)) {
+      seen.add(m.url)
+      out.push(m)
+    }
+  }
+  return out
+}
+
 function parseQuoted(tweet: AnyObj): QuotedPost | undefined {
   const q = unwrapTweetResult(tweet.quoted_status_result?.result)
   if (!q) return undefined
   const user = parseUser(q)
   const id = String(q.rest_id ?? q.legacy?.id_str ?? '')
   if (!id) return undefined
-  const quoted: QuotedPost = { tweet_id: id, screen_name: user.screen_name, name: user.name, text: extractText(q).text }
-  const article = q.article?.article_results?.result
+  const extracted = extractText(q)
+  const quoted: QuotedPost = { tweet_id: id, screen_name: user.screen_name, name: user.name, text: extracted.text }
+  const article = findArticleNode(q)
   if (article?.rest_id) quoted.article_id = String(article.rest_id)
   if (article?.title) quoted.article_title = String(article.title)
   if (article?.preview_text) quoted.article_preview = String(article.preview_text)
-  const media = parseMedia(q.legacy)
+  const art = extractArticleContent(article)
+  if (art?.isFull && art.body) {
+    quoted.article_text = art.body
+    if (art.title && !quoted.article_title) quoted.article_title = art.title
+  }
+  const media = mergeMediaLists(parseMedia(q.legacy), art?.images)
   if (media.length) quoted.media = media
   return quoted
 }
@@ -172,7 +411,7 @@ function parseQuoted(tweet: AnyObj): QuotedPost | undefined {
 
 /** Detect Twitter Article node or article-like URLs */
 export function detectHasArticle(tweet: AnyObj, urls: string[]): 0 | 1 {
-  const article = tweet.article?.article_results?.result
+  const article = findArticleNode(tweet)
   if (article && (article.title || article.preview_text || article.rest_id)) return 1
   for (const u of urls) {
     const s = String(u).toLowerCase()
@@ -187,8 +426,8 @@ export function tweetToPost(tweet: AnyObj, sortIndex = ''): ParsedPost | null {
   const id = String(tweet.rest_id ?? tweet.legacy?.id_str ?? '')
   if (!id || !tweet.legacy) return null
   const user = parseUser(tweet)
-  const { text, urls } = extractText(tweet)
-  const media = parseMedia(tweet.legacy)
+  const { text, urls, articleTitle, articleFull, articleImages } = extractText(tweet)
+  const media = mergeMediaLists(parseMedia(tweet.legacy), articleImages)
   const quoted = parseQuoted(tweet)
   const hasQuote = !!(quoted || tweet.legacy.is_quote_status)
   return {
@@ -214,6 +453,8 @@ export function tweetToPost(tweet: AnyObj, sortIndex = ''): ParsedPost | null {
     has_link: urls.length > 0 ? 1 : 0,
     has_quote: hasQuote ? 1 : 0,
     has_article: detectHasArticle(tweet, urls),
+    ...(articleTitle ? { article_title: articleTitle } : {}),
+    ...(articleFull ? { article_fetched_at: Date.now() } : {}),
     url: `https://x.com/${user.screen_name || 'i/web'}/status/${id}`,
   }
 }
@@ -346,10 +587,81 @@ export function parseThread(json: AnyObj, focalId: string): ThreadItem[] {
     if (id === focalId) continue
     if (parseUser(tweet).user_id !== focalUser) continue
     if (convId && tweet.legacy?.conversation_id_str !== convId) continue
+    // 过滤掉作者在评论区回复其他路人的帖子（只保留真正自回复串推）
+    const replyToUser = tweet.legacy?.in_reply_to_user_id_str
+    if (replyToUser && String(replyToUser) !== focalUser) continue
     const p = tweetToPost(tweet)
     if (!p) continue
     items.push({ tweet_id: id, text: p.text, created_at: p.created_at, media: p.media })
   }
   items.sort((a, b) => a.created_at - b.created_at || (BigInt(a.tweet_id) < BigInt(b.tweet_id) ? -1 : 1))
   return items
+}
+
+/** 从 TweetDetail 响应中直接提取目标推文节点（兼容各种包装与深层嵌套） */
+export function extractTweetFromDetail(json: AnyObj, targetId: string): { post: ParsedPost; raw: AnyObj } | null {
+  const check = (result: AnyObj | undefined): { post: ParsedPost; raw: AnyObj } | null => {
+    const t = unwrapTweetResult(result)
+    if (!t) return null
+    const id = String(t.rest_id ?? t.legacy?.id_str ?? '')
+    if (id !== targetId) return null
+    const post = tweetToPost(t)
+    return post ? { post, raw: t } : null
+  }
+  const instructions = findInstructions(json)
+  for (const ins of instructions) {
+    if (ins.type !== 'TimelineAddEntries') continue
+    for (const e of ins.entries ?? []) {
+      const c = e.content ?? {}
+      const itemRes = c.itemContent?.tweet_results?.result ?? c.content?.tweet_results?.result
+      if (itemRes) {
+        const hit = check(itemRes)
+        if (hit) return hit
+      }
+      if (Array.isArray(c.items)) {
+        for (const it of c.items) {
+          const hit = check(it?.item?.itemContent?.tweet_results?.result)
+          if (hit) return hit
+        }
+      }
+    }
+  }
+  // 兜底：深搜任意 rest_id === targetId 的 Tweet 节点（兼容 TweetResultByRestId 或新版结构）
+  const rawHit = deepFind(
+    json?.data,
+    (_k, v) =>
+      !!(
+        v &&
+        typeof v === 'object' &&
+        !Array.isArray(v) &&
+        String((v as AnyObj).rest_id ?? '') === targetId &&
+        (v as AnyObj).legacy
+      ),
+  )
+  if (rawHit) {
+    const post = tweetToPost(rawHit)
+    if (post) return { post, raw: rawHit }
+  }
+  return null
+}
+
+const ARTICLE_URL_RE = /(?:x|twitter)\.com\/(?:i\/articles?\/|[^/]+\/article\/)/i
+
+/** 判断一条推文本身是否为「尚未抓全正文」的直接 X 文章 */
+export function needsDirectArticleRepair(p: Pick<Post, 'has_article' | 'text' | 'urls' | 'article_fetched_at'>): boolean {
+  const isArticle =
+    p.has_article === 1 ||
+    ARTICLE_URL_RE.test(p.text || '') ||
+    (p.urls ?? []).some((u) => ARTICLE_URL_RE.test(u))
+  if (!isArticle) return false
+  if (p.article_fetched_at && (p.text || '').length >= 400) return false
+  return (p.text || '').length < 600
+}
+
+/** 判断一条书签的引用对象是否为「尚未抓全正文」的 X 文章 */
+export function needsQuotedArticleRepair(q: QuotedPost | undefined): boolean {
+  if (!q?.tweet_id) return false
+  const hasArticle = !!(q.article_id || q.article_title || ARTICLE_URL_RE.test(q.text || ''))
+  if (!hasArticle) return false
+  return !q.article_text || q.article_text.length < 300
 }

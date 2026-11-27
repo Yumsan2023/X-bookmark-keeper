@@ -83,6 +83,18 @@ export class BookmarkDB extends Dexie {
       cleanupQueue: 'tweet_id, account, status, added_at',
       coldTombstones: 'tweet_id, archived_at',
     })
+    // v7 (v2.1): 新增 [folder+sort_index] 与 [folder+created_at] 复合索引，万级分类与按年筛选零卡顿
+    this.version(7).stores({
+      posts:
+        'tweet_id, sort_index, screen_name, created_at, saved_at, folder, status, sync_run, source, [source+status+saved_at], [folder+sort_index], [folder+created_at], has_image, has_video, has_link, has_quote, *tags, *accounts',
+      folders: 'name, x_id, source',
+      searchMeta: 'key',
+      foryouProfile: 'key',
+      foryouDecisions: 'tweet_id, at, decision, feedback',
+      foryouValidations: 'id, at',
+      cleanupQueue: 'tweet_id, account, status, added_at',
+      coldTombstones: 'tweet_id, archived_at',
+    })
   }
 }
 

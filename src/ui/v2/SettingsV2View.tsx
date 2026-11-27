@@ -1,9 +1,9 @@
 import { useState } from 'react'
-import { Save, Database, Cpu, Sliders, FileText, Trash2 } from 'lucide-react'
+import { Save, Database, Cpu, Sliders, FileText, Trash2, RefreshCw, Plus } from 'lucide-react'
 import { clearAll } from '@/db/posts'
 import { applyUiFontSize, clampUiFontSize, UI_FONT_STEPS } from '@/shared/ui-font'
-import type { Settings } from '@/shared/types'
-import type { Library } from '../hooks'
+import type { NotionDatabaseEntry, Settings } from '@/shared/types'
+import { bg, type Library } from '../hooks'
 import { useDialogs } from '../components/Dialogs'
 import { AccountBookmarkExport } from '../components/AccountBookmarkExport'
 import { FullBackupPanel } from '../components/FullBackupPanel'
@@ -25,6 +25,43 @@ export function SettingsV2View({
   const [section, setSection] = useState<Section>('general')
   const [s, setS] = useState(settings)
   const [libraryRev, setLibraryRev] = useState(0)
+  const [fetchingDbs, setFetchingDbs] = useState(false)
+  const [newDbName, setNewDbName] = useState('')
+  const [newDbId, setNewDbId] = useState('')
+
+  const fetchNotionDbs = async () => {
+    if (!s.notionToken.trim()) {
+      onNotify('请先填入 Notion Integration Token')
+      return
+    }
+    const origin = 'https://api.notion.com/*'
+    if (!(await chrome.permissions.contains({ origins: [origin] }))) {
+      const granted = await chrome.permissions.request({ origins: [origin] })
+      if (!granted) {
+        onNotify('未授予 api.notion.com 访问权限')
+        return
+      }
+    }
+    setFetchingDbs(true)
+    try {
+      const res = await bg<NotionDatabaseEntry[]>({ type: 'notion/listDatabases', token: s.notionToken })
+      if (res.ok && res.data) {
+        const mergedMap = new Map<string, NotionDatabaseEntry>()
+        for (const db of s.notionDatabases ?? []) mergedMap.set(db.id, db)
+        for (const db of res.data) mergedMap.set(db.id, db)
+        const nextDbs = [...mergedMap.values()]
+        const nextDefault = s.notionDatabaseId || nextDbs[0]?.id || ''
+        const next = { ...s, notionDatabases: nextDbs, notionDatabaseId: nextDefault }
+        setS(next)
+        await save(next)
+        onNotify(`已拉取到 ${res.data.length} 个 Notion 数据库并自动保存`)
+      } else {
+        onNotify(`拉取失败：${res.error}`)
+      }
+    } finally {
+      setFetchingDbs(false)
+    }
+  }
 
   const up = (patch: Partial<Settings>) => setS((c) => ({ ...c, ...patch }))
   const upLlm = (patch: Partial<Settings['llm']>) => setS((c) => ({ ...c, llm: { ...c.llm, ...patch } }))
@@ -220,28 +257,130 @@ export function SettingsV2View({
       )}
 
       {section === 'notion' && (
-        <div className="v2-card space-y-4 p-5">
+        <div className="v2-card space-y-4 p-4">
           <div className="text-xs leading-relaxed" style={{ color: 'var(--muted)' }}>
-            配置后可在阅读抽屉、每日唤醒或批量操作栏一键把精选书签（含合并 Thread、引用和笔记）推送到你的 Notion 数据库。Token 仅存本机，导出备份默认不包含。
+            配置后可在阅读抽屉里像 Antigravity 一样<strong>划词引用或引用整篇文章并写批注</strong>，一键选择目标 Notion 数据库同步过去。Token 仅存本机，导出备份默认不包含。
           </div>
           <label className="block text-xs">
             <span className="mb-1.5 block font-medium" style={{ color: 'var(--muted)' }}>Notion Integration Token (secret_... / ntn_...)</span>
-            <input
-              type="password"
-              value={s.notionToken}
-              onChange={(e) => up({ notionToken: e.target.value })}
-              placeholder="ntn_..."
-              className="w-full rounded-lg border px-3 py-2 text-sm"
-              style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
-            />
+            <div className="flex gap-2">
+              <input
+                type="password"
+                value={s.notionToken}
+                onChange={(e) => up({ notionToken: e.target.value })}
+                placeholder="ntn_..."
+                className="flex-1 rounded-lg border px-3 py-1.5 text-sm"
+                style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
+              />
+              <button
+                type="button"
+                disabled={fetchingDbs || !s.notionToken.trim()}
+                onClick={() => void fetchNotionDbs()}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium hover:border-[var(--accent)] disabled:opacity-40"
+                style={{ borderColor: 'var(--border)', background: 'var(--card)' }}
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${fetchingDbs ? 'animate-spin' : ''}`} />
+                <span>{fetchingDbs ? '拉取中...' : '一键拉取我的数据库'}</span>
+              </button>
+            </div>
           </label>
-          <label className="block text-xs">
-            <span className="mb-1.5 block font-medium" style={{ color: 'var(--muted)' }}>目标 Database ID</span>
+
+          {/* Multi-database list */}
+          <div className="border-t pt-3.5" style={{ borderColor: 'var(--border)' }}>
+            <div className="mb-2 flex items-center justify-between text-xs">
+              <span className="font-medium">可选目标数据库（{(s.notionDatabases ?? []).length} 个，引用批注时可自由切换）</span>
+              <span style={{ color: 'var(--muted)' }}>点击设为默认</span>
+            </div>
+            {(s.notionDatabases ?? []).length > 0 ? (
+              <div className="mb-3 space-y-1.5">
+                {(s.notionDatabases ?? []).map((entry) => {
+                  const isDef = s.notionDatabaseId === entry.id
+                  return (
+                    <div
+                      key={entry.id}
+                      className="flex items-center justify-between gap-2 rounded-lg border px-3 py-1.5 text-xs"
+                      style={{
+                        borderColor: isDef ? 'var(--accent)' : 'var(--border)',
+                        background: isDef ? 'var(--accent-soft)' : 'var(--surface)',
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => up({ notionDatabaseId: entry.id })}
+                        className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                      >
+                        <span className="truncate font-medium">{entry.name}</span>
+                        <code className="truncate text-[10.5px]" style={{ color: 'var(--muted)' }}>{entry.id}</code>
+                        {isDef && <span className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px]" style={{ background: 'var(--accent)', color: '#fff' }}>默认</span>}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextList = (s.notionDatabases ?? []).filter((x) => x.id !== entry.id)
+                          up({
+                            notionDatabases: nextList,
+                            notionDatabaseId: isDef ? nextList[0]?.id ?? '' : s.notionDatabaseId,
+                          })
+                        }}
+                        className="rounded p-1 hover:text-rose-400"
+                        style={{ color: 'var(--muted)' }}
+                        title="移除此数据库"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="mb-3 rounded-lg border border-dashed px-3 py-2.5 text-xs" style={{ borderColor: 'var(--border)', color: 'var(--muted)' }}>
+                尚未添加数据库：可点上方「一键拉取我的数据库」（需在 Notion 页面右上角 Connections 授权你的 Integration），或在下方手动添加。
+              </div>
+            )}
+
+            {/* Manual add database */}
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-12">
+              <input
+                value={newDbName}
+                onChange={(e) => setNewDbName(e.target.value)}
+                placeholder="数据库名称（如：随想与笔记库）"
+                className="rounded-lg border px-2.5 py-1.5 text-xs sm:col-span-4"
+                style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
+              />
+              <input
+                value={newDbId}
+                onChange={(e) => setNewDbId(e.target.value)}
+                placeholder="32 位 Database ID"
+                className="rounded-lg border px-2.5 py-1.5 text-xs sm:col-span-6"
+                style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const id = newDbId.trim()
+                  if (!id) return
+                  const name = newDbName.trim() || `Database ${id.slice(0, 8)}`
+                  const cur = s.notionDatabases ?? []
+                  const nextList = [...cur.filter((x) => x.id !== id), { id, name }]
+                  up({ notionDatabases: nextList, notionDatabaseId: s.notionDatabaseId || id })
+                  setNewDbName('')
+                  setNewDbId('')
+                }}
+                className="inline-flex items-center justify-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-medium hover:border-[var(--accent)] sm:col-span-2"
+                style={{ borderColor: 'var(--border)', background: 'var(--card)' }}
+              >
+                <Plus className="h-3.5 w-3.5" /> 添加
+              </button>
+            </div>
+          </div>
+
+          <label className="block border-t pt-3 text-xs" style={{ borderColor: 'var(--border)' }}>
+            <span className="mb-1 block font-medium" style={{ color: 'var(--muted)' }}>默认 Database ID（兼容旧版单项配置）</span>
             <input
               value={s.notionDatabaseId}
               onChange={(e) => up({ notionDatabaseId: e.target.value })}
               placeholder="32 位 UUID，例如 4248ec4ca80981d69b56e34ccfb8069e"
-              className="w-full rounded-lg border px-3 py-2 text-sm"
+              className="w-full rounded-lg border px-3 py-1.5 text-xs"
               style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
             />
           </label>

@@ -18,6 +18,8 @@ export interface Filters {
   has?: HasKind[]
   /** Every listed tag must be present (AND). Query `tag:` uses this too. */
   tags?: string[]
+  /** Exclude posts carrying any of these tags (e.g. Long Post = tag:长文章 excluding X文章). */
+  excludeTags?: string[]
   /**
    * Checkbox filter: a post matches when it has at least one of these tags (OR).
    * Combined with `tags` / query `tag:` by AND (must satisfy both).
@@ -68,11 +70,22 @@ interface IndexDoc {
 function toDoc(p: Post): IndexDoc {
   return {
     id: p.tweet_id,
-    text: p.text,
+    text: [p.article_title, p.text].filter(Boolean).join('\n'),
     author: `${p.name} ${p.screen_name}`,
     tags: (p.tags ?? []).join(' '),
     folder: p.folder ?? '',
-    extra: [p.quoted?.text, p.note, ...(p.thread ?? []).map((t) => t.text), ...(p.urls ?? [])].filter(Boolean).join('\n'),
+    extra: [
+      p.quoted?.name,
+      p.quoted?.screen_name,
+      p.quoted?.article_title,
+      p.quoted?.text,
+      p.quoted?.article_text,
+      p.note,
+      ...(p.thread ?? []).map((t) => t.text),
+      ...(p.urls ?? []),
+    ]
+      .filter(Boolean)
+      .join('\n'),
   }
 }
 
@@ -89,10 +102,33 @@ function newIndex() {
 }
 
 function searchableText(p: Post): string {
-  return [p.text, p.name, p.screen_name, (p.tags ?? []).join(' '), p.folder, p.quoted?.text, p.note, ...(p.thread ?? []).map((t) => t.text)]
+  return [
+    p.article_title,
+    p.text,
+    p.name,
+    p.screen_name,
+    (p.tags ?? []).join(' '),
+    p.folder,
+    p.quoted?.name,
+    p.quoted?.screen_name,
+    p.quoted?.article_title,
+    p.quoted?.text,
+    p.quoted?.article_text,
+    p.note,
+    ...(p.thread ?? []).map((t) => t.text),
+    ...(p.urls ?? []),
+  ]
     .filter(Boolean)
     .join('\n')
     .toLowerCase()
+}
+
+/** 校验帖子是否真实包含查询中的所有关键词与精确短语（大小写不敏感、NFKC 归一化子串匹配） */
+export function matchesTermsExact(p: Post, parsed: ParsedQuery): boolean {
+  const needles = [...parsed.terms, ...parsed.phrases].map((t) => t.toLowerCase().normalize('NFKC')).filter(Boolean)
+  if (!needles.length) return true
+  const hay = searchableText(p).normalize('NFKC')
+  return needles.every((n) => hay.includes(n))
 }
 
 /**
@@ -123,6 +159,11 @@ export function matchesFilters(p: Post, q: ParsedQuery, f: Filters = {}): boolea
   for (const t of required) {
     if (t === NO_TAG) continue
     if (!tags.includes(t.toLowerCase())) return false
+  }
+  if (f.excludeTags?.length) {
+    for (const ex of f.excludeTags) {
+      if (tags.includes(ex.toLowerCase())) return false
+    }
   }
   if (!matchesCheckedTags(p.tags, f.anyTags)) return false
   const status = q.status ?? (f.status && f.status !== 'all' ? f.status : undefined)
@@ -181,12 +222,20 @@ export class SearchEngine {
     this._ready = false
   }
 
-  /** 分批追加文档到索引; 不强制缓存 Post (大库模式) */
+  /** 分批追加文档到索引; 自动去重防 duplicate ID，不强制缓存 Post (大库模式) */
   addBatch(posts: Post[], cachePosts = false) {
-    this.index.addAll(posts.map(toDoc))
-    if (cachePosts) {
-      for (const p of posts) this.posts.set(p.tweet_id, p)
+    const fresh: IndexDoc[] = []
+    const batchSeen = new Set<string>()
+    for (const p of posts) {
+      if (!p?.tweet_id || batchSeen.has(p.tweet_id)) continue
+      batchSeen.add(p.tweet_id)
+      if (this.index.has(p.tweet_id)) {
+        this.index.discard(p.tweet_id)
+      }
+      fresh.push(toDoc(p))
+      if (cachePosts) this.posts.set(p.tweet_id, p)
     }
+    if (fresh.length) this.index.addAll(fresh)
   }
 
   markReady() {
@@ -194,8 +243,16 @@ export class SearchEngine {
   }
 
   upsert(p: Post) {
+    if (!p?.tweet_id) return
     if (this.index.has(p.tweet_id)) this.index.discard(p.tweet_id)
     this.posts.set(p.tweet_id, p)
+    this.index.add(toDoc(p))
+  }
+
+  /** 大库增量更新：只更新 MiniSearch 索引条目，不常驻缓存整条 Post */
+  upsertIndexOnly(p: Post) {
+    if (!p?.tweet_id) return
+    if (this.index.has(p.tweet_id)) this.index.discard(p.tweet_id)
     this.index.add(toDoc(p))
   }
 
@@ -234,7 +291,7 @@ export class SearchEngine {
     if (parsed.terms.length) {
       const ms = this.index.search(parsed.terms.join(' '), {
         prefix: true,
-        fuzzy: (term) => (term.length >= 5 && /^[a-z]+$/.test(term) ? 0.2 : false),
+        fuzzy: (term) => (term.length >= 7 && /^[a-z]+$/.test(term) ? 0.2 : false),
         combineWith: 'AND',
       })
       for (const r of ms) scored.set(String(r.id), { id: String(r.id), score: r.score, terms: r.terms })
@@ -266,7 +323,7 @@ export class SearchEngine {
       // 1) MiniSearch: 前缀 + 模糊, 词间 AND
       const ms = this.index.search(parsed.terms.join(' '), {
         prefix: true,
-        fuzzy: (term) => (term.length >= 5 && /^[a-z]+$/.test(term) ? 0.2 : false),
+        fuzzy: (term) => (term.length >= 7 && /^[a-z]+$/.test(term) ? 0.2 : false),
         combineWith: 'AND',
       })
       for (const r of ms) {

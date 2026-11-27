@@ -1,17 +1,18 @@
 import { useEffect, useState } from 'react'
-import { RefreshCw, Zap, Wrench, CheckCircle2, AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react'
+import { RefreshCw, Zap, Wrench, CheckCircle2, AlertTriangle, ChevronDown, ChevronRight, Pause } from 'lucide-react'
+import { needsDirectArticleRepair, needsQuotedArticleRepair } from '@/api/parser'
 import { db } from '@/db/db'
 import { STORAGE_KEYS, type Post, type Settings } from '@/shared/types'
 import { bg, useAuthInfo, useProgress, useTask } from '../hooks'
 import { SyncView } from '../components/SyncView'
 
 interface RepairCandidates {
+  directArticles: Post[]
+  quotedArticles: Post[]
   truncated: Post[]
-  missingThreads: Post[]
   tcoLinks: Post[]
 }
 
-const THREAD_HINT = /(?:^|\s)(?:1\/\d*|1\/|🧵|thread\b|长推|串推)/i
 const TCO_RE = /https?:\/\/t\.co\/[A-Za-z0-9]+/
 
 export function SyncRepairView({
@@ -30,6 +31,8 @@ export function SyncRepairView({
   const task = useTask()
   const [autoMap, setAutoMap] = useState<Record<string, number>>({})
   const [scanning, setScanning] = useState(false)
+  const [batchSize, setBatchSize] = useState(100)
+  const [skipChecked, setSkipChecked] = useState(true)
   const [candidates, setCandidates] = useState<RepairCandidates | null>(null)
   const [showLegacySync, setShowLegacySync] = useState(false)
 
@@ -52,22 +55,36 @@ export function SyncRepairView({
     setScanning(true)
     try {
       const all = await db.posts.where('status').equals('active').toArray()
+      const directArticles: Post[] = []
+      const quotedArticles: Post[] = []
       const truncated: Post[] = []
-      const missingThreads: Post[] = []
       const tcoLinks: Post[] = []
       for (const p of all) {
+        if (skipChecked && p.article_checked_at) continue
         const s = (p.text || '').trim()
-        if (s.length >= 240 && s.length <= 330 && (s.endsWith('…') || s.endsWith('...')) && !p.has_article) {
-          truncated.push(p)
+        const directNeedsImg = p.has_article === 1 && !p.article_fetched_at && (p.media?.length ?? 0) === 0
+        if (needsDirectArticleRepair(p) || directNeedsImg) {
+          directArticles.push(p)
         }
-        if ((!p.thread || p.thread.length === 0) && THREAD_HINT.test(s)) {
-          missingThreads.push(p)
+        const quotedNeedsImg =
+          !!(p.quoted?.article_title || p.quoted?.article_id) &&
+          !(p.quoted?.media?.length || (p.quoted?.article_text || '').includes('!['))
+        if (needsQuotedArticleRepair(p.quoted) || quotedNeedsImg) {
+          quotedArticles.push(p)
+        }
+        if (s.length >= 220 && s.length <= 360 && (s.endsWith('…') || s.endsWith('...')) && !p.has_article) {
+          truncated.push(p)
         }
         if (TCO_RE.test(s) || (p.urls ?? []).some((u) => u.includes('t.co/'))) {
           tcoLinks.push(p)
         }
       }
-      setCandidates({ truncated, missingThreads, tcoLinks })
+      // 优先补全收藏数更高的高价值文章
+      const byBookmarks = (a: Post, b: Post) => (b.metrics?.bookmarks ?? 0) - (a.metrics?.bookmarks ?? 0)
+      directArticles.sort(byBookmarks)
+      quotedArticles.sort(byBookmarks)
+      truncated.sort(byBookmarks)
+      setCandidates({ directArticles, quotedArticles, truncated, tcoLinks })
     } finally {
       setScanning(false)
     }
@@ -75,9 +92,23 @@ export function SyncRepairView({
 
   const startRepair = async (posts: Post[], label: string) => {
     if (!posts.length) return
-    const batch = posts.slice(0, 50).map((p) => p.tweet_id)
+    const batch = posts.slice(0, batchSize).map((p) => p.tweet_id)
     const r = await bg({ type: 'repair/incomplete', tweetIds: batch })
-    onNotify(r.ok ? `已启动「${label}」定向补全（本批 ${batch.length} 条）` : `启动失败：${r.error}`)
+    onNotify(r.ok ? `已启动「${label}」全文与配图补全（本批 ${batch.length} 条，安全限速，遇 429 自动熔断）` : `启动失败：${r.error}`)
+  }
+
+  const startCombinedArticles = async () => {
+    if (!candidates) return
+    const seen = new Set<string>()
+    const combined: Post[] = []
+    for (const p of [...candidates.directArticles, ...candidates.quotedArticles]) {
+      if (!seen.has(p.tweet_id)) {
+        seen.add(p.tweet_id)
+        combined.push(p)
+      }
+    }
+    combined.sort((a, b) => (b.metrics?.bookmarks ?? 0) - (a.metrics?.bookmarks ?? 0))
+    await startRepair(combined, '全库残缺 X 文章（直接 + 引用）')
   }
 
   const running = progress?.status === 'running' || progress?.status === 'waiting'
@@ -190,53 +221,144 @@ export function SyncRepairView({
         )}
       </div>
 
-      {/* Incomplete content repair card */}
-      <div className="v2-card mb-5 p-5">
+      {/* Incomplete content & X Article full-body repair card */}
+      <div className="v2-card mb-4 p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
             <Wrench className="h-4 w-4" style={{ color: 'var(--accent)' }} />
             <div>
-              <div className="font-semibold text-sm">残缺内容定向补全队列</div>
+              <div className="font-semibold text-sm">X 文章全文 & 残缺内容补全队列</div>
               <div className="text-xs" style={{ color: 'var(--muted)' }}>
-                扫描热库中疑似截断长文、缺失 Thread 串推和未还原的 t.co 短链，按批限速定向补抓。
+                只补全缺失正文与 X 长文章全文（含被 quote 引用的文章全文，自动保留引用者长评），不再抓取无关评论区串推。
               </div>
             </div>
           </div>
-          <button
-            type="button"
-            disabled={scanning}
-            onClick={() => void scanIncomplete()}
-            className="rounded-xl border px-3.5 py-2 text-xs font-medium hover:bg-[var(--hover)]"
-            style={{ borderColor: 'var(--border)' }}
-          >
-            {scanning ? '扫描中...' : '扫描当前热库残缺项'}
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={batchSize}
+              onChange={(e) => setBatchSize(Number(e.target.value) || 100)}
+              className="rounded-lg border px-2 py-1.5 text-xs"
+              style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
+              title="每批补全条数"
+            >
+              <option value={20}>每批 20 条</option>
+              <option value={50}>每批 50 条</option>
+              <option value={100}>每批 100 条 (推荐)</option>
+              <option value={200}>每批 200 条</option>
+              <option value={500}>全量续跑 (500/批)</option>
+            </select>
+            <button
+              type="button"
+              disabled={scanning}
+              onClick={() => void scanIncomplete()}
+              className="rounded-lg px-3 py-1.5 text-xs font-semibold disabled:opacity-50"
+              style={{ background: 'var(--primary-btn-bg)', color: 'var(--primary-btn-fg)' }}
+            >
+              {scanning ? '全库扫描中...' : '全库体检扫描残缺文章/配图'}
+            </button>
+          </div>
         </div>
 
-        {candidates && (
-          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-            {[
-              { label: '疑似截断长文', list: candidates.truncated },
-              { label: '疑似未抓全 Thread', list: candidates.missingThreads },
-              { label: '未还原 t.co 短链', list: candidates.tcoLinks },
-            ].map((item) => (
-              <div key={item.label} className="rounded-xl border p-3.5" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-                <div className="text-xs" style={{ color: 'var(--muted)' }}>{item.label}</div>
-                <div className="mt-1 flex items-baseline justify-between">
-                  <span className="text-xl font-semibold tabular-nums">{item.list.length}</span>
-                  <button
-                    type="button"
-                    disabled={!item.list.length || task?.status === 'running'}
-                    onClick={() => void startRepair(item.list, item.label)}
-                    className="rounded-lg border px-2.5 py-1 text-xs hover:border-[var(--accent)] disabled:opacity-40"
-                    style={{ borderColor: 'var(--border)' }}
-                  >
-                    补抓前 {Math.min(50, item.list.length)} 条
-                  </button>
-                </div>
-              </div>
-            ))}
+        {/* Auto-repair toggle + resumable skip-checked toggle */}
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+          <div className="flex flex-wrap items-center gap-4">
+            <label className="inline-flex cursor-pointer items-center gap-2">
+              <input
+                type="checkbox"
+                checked={settings.autoRepairArticles !== false}
+                onChange={(e) => void save({ ...settings, autoRepairArticles: e.target.checked })}
+              />
+              <span>新同步书签自动补全 X 文章全文</span>
+            </label>
+            <label className="inline-flex cursor-pointer items-center gap-2" style={{ color: 'var(--muted)' }}>
+              <input
+                type="checkbox"
+                checked={skipChecked}
+                onChange={(e) => setSkipChecked(e.target.checked)}
+              />
+              <span>续跑模式（自动跳过已体检过的条目）</span>
+            </label>
           </div>
+          {task?.kind === 'repair' && task.status === 'running' && (
+            <button
+              type="button"
+              onClick={async () => {
+                const r = await bg({ type: 'sync/cancel' })
+                onNotify(r.ok ? '已停止补全任务' : `停止失败：${r.error || '未知错误'}`)
+              }}
+              className="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] text-rose-400 hover:bg-rose-500/10"
+              style={{ borderColor: 'var(--danger)' }}
+            >
+              <Pause className="h-3 w-3" /> 停止补全 ({task.done}/{task.total})
+            </button>
+          )}
+        </div>
+
+        {/* Live repair task progress bar */}
+        {task?.kind === 'repair' && (task.status === 'running' || task.done > 0) && (
+          <div className="mt-2.5 rounded-lg border px-3 py-2 text-xs" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+            <div className="flex items-center justify-between">
+              <span>
+                补全任务：<strong>{task.status === 'running' ? '正在限速抓取' : task.status}</strong> · 已处理 {task.done} / {task.total}
+                {task.failed ? ` · 失败 ${task.failed}` : ''}
+              </span>
+              <span className="tabular-nums" style={{ color: 'var(--muted)' }}>
+                {task.total ? Math.round((task.done / task.total) * 100) : 0}%
+              </span>
+            </div>
+            <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full" style={{ background: 'var(--surface-2)' }}>
+              <div
+                className="h-full rounded-full bg-blue-500 transition-all"
+                style={{ width: `${task.total ? Math.min(100, (task.done / task.total) * 100) : 0}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {candidates && (
+          <>
+            {(candidates.directArticles.length > 0 || candidates.quotedArticles.length > 0) && (
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3.5 py-2.5 text-xs" style={{ background: 'var(--accent-soft)', borderColor: 'var(--border)' }}>
+                <span>
+                  共检测到 <strong>{(candidates.directArticles.length + candidates.quotedArticles.length).toLocaleString()}</strong> 条残缺 X 文章（含直接收藏与被 quote 文章），按收藏热度优先补全全文与配图
+                </span>
+                <button
+                  type="button"
+                  disabled={task?.status === 'running'}
+                  onClick={() => void startCombinedArticles()}
+                  className="rounded-lg px-3 py-1.5 text-xs font-semibold disabled:opacity-40"
+                  style={{ background: 'var(--primary-btn-bg)', color: 'var(--primary-btn-fg)' }}
+                >
+                  一键合并补全本批（前 {Math.min(batchSize, candidates.directArticles.length + candidates.quotedArticles.length)} 条）
+                </button>
+              </div>
+            )}
+            <div className="mt-3 grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
+              {[
+                { label: '残缺 X 文章（直接收藏）', list: candidates.directArticles, hint: '缺全文或配图，高收藏优先' },
+                { label: '引用了 X 文章（缺全文/图）', list: candidates.quotedArticles, hint: '保留长评 + 抓原文章全文配图' },
+                { label: '疑似截断长推文 / Quote', list: candidates.truncated, hint: '补全 note_tweet 完整正文' },
+                { label: '未还原 t.co 短链', list: candidates.tcoLinks, hint: '展开真实目标链接' },
+              ].map((item) => (
+                <div key={item.label} className="rounded-xl border p-3" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+                  <div className="text-xs font-medium">{item.label}</div>
+                  <div className="mt-0.5 text-[11px]" style={{ color: 'var(--muted)' }}>{item.hint}</div>
+                  <div className="mt-2 flex items-baseline justify-between gap-2">
+                    <span className="text-xl font-semibold tabular-nums">{item.list.length.toLocaleString()}</span>
+                    <button
+                      type="button"
+                      disabled={!item.list.length || task?.status === 'running'}
+                      onClick={() => void startRepair(item.list, item.label)}
+                      className="rounded-lg border px-2.5 py-1 text-xs hover:border-[var(--accent)] disabled:opacity-40"
+                      style={{ borderColor: 'var(--border)' }}
+                    >
+                      补前 {Math.min(batchSize, item.list.length)} 条
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
 

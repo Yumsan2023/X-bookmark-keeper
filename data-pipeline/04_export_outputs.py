@@ -26,6 +26,8 @@ from typing import Any, Dict, List, Set
 
 from taxonomy import CLEANUP_FOLDER, DOMAIN_NAMES, TIER_A, TIER_B, TIER_D, TIER_S
 
+COLD_FOLDER = "冷库备查"
+
 
 def fmt_mb(n_bytes: int) -> str:
     return f"{n_bytes / (1024 * 1024):.2f} MB"
@@ -73,6 +75,7 @@ def export_outputs(
         now_ms = int(time.time() * 1000)
         hot_posts: List[Dict[str, Any]] = []
         all_classified_posts: List[Dict[str, Any]] = []
+        layered_posts: List[Dict[str, Any]] = []
         cold_only_ids: List[str] = []
         cleanup_by_account: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         cleanup_items_all: List[Dict[str, Any]] = []
@@ -84,6 +87,7 @@ def export_outputs(
         cleanup_reason_ctr = Counter()
         used_folders: Set[str] = set()
         all_used_folders: Set[str] = set()
+        layered_used_folders: Set[str] = set()
 
         for r in rows:
             total_raw_bytes += int(r["raw_bytes"] or 0)
@@ -110,6 +114,26 @@ def export_outputs(
             all_classified_posts.append(post)
             if post.get("folder"):
                 all_used_folders.add(post["folder"])
+
+            # Layered view: hot items (S/A) stay in 10 core domains, tier:B goes into COLD_FOLDER
+            # with its detected domain preserved as a tag (`冷库:<domain>`) for easy mining,
+            # and tier:D stays in CLEANUP_FOLDER.
+            layered_post = dict(post)
+            if tier in hot_tiers or (is_timeline and keep_timeline_posts):
+                pass
+            elif tier == TIER_D and not is_timeline:
+                layered_post["folder"] = CLEANUP_FOLDER
+            elif not is_timeline:
+                layered_post["folder"] = COLD_FOLDER
+                ltags = list(layered_post.get("tags") or [])
+                if domain and domain != CLEANUP_FOLDER:
+                    cold_tag = f"冷库:{domain}"
+                    if cold_tag not in ltags:
+                        ltags.append(cold_tag)
+                layered_post["tags"] = ltags
+            layered_posts.append(layered_post)
+            if layered_post.get("folder"):
+                layered_used_folders.add(layered_post["folder"])
 
             if tier in hot_tiers or (is_timeline and keep_timeline_posts):
                 hot_posts.append(post)
@@ -173,6 +197,7 @@ def export_outputs(
 
         # 1b. Write lossless full_classified_backup.json (ALL posts kept, tier:D placed in 待清理 folder, ZERO deleted!)
         full_bytes = 0
+        layered_bytes = 0
         if write_full_classified:
             full_folders = build_folder_list(all_used_folders | set(DOMAIN_NAMES) | {CLEANUP_FOLDER})
             full_path = out_dir / "full_classified_backup.json"
@@ -184,6 +209,18 @@ def export_outputs(
             )
             full_path.write_text(full_str, encoding="utf-8")
             full_bytes = full_path.stat().st_size
+
+            # 1c. Write full_layered_backup.json (ALL posts kept: S+A in 10 core domains, B in 冷库备查, D in 待清理)
+            layered_folders = build_folder_list(layered_used_folders | set(DOMAIN_NAMES) | {COLD_FOLDER, CLEANUP_FOLDER})
+            layered_path = out_dir / "full_layered_backup.json"
+            layered_payload = wrap_backup(layered_posts, layered_folders)
+            layered_str = (
+                json.dumps(layered_payload, ensure_ascii=False, indent=2)
+                if len(layered_posts) <= 2000
+                else json.dumps(layered_payload, ensure_ascii=False, separators=(",", ":"))
+            )
+            layered_path.write_text(layered_str, encoding="utf-8")
+            layered_bytes = layered_path.stat().st_size
 
         # 2. Write cleanup_queue_by_account.json (categorized into 待清理, zero deletion executed)
         cleanup_path = out_dir / "cleanup_queue_by_account.json"

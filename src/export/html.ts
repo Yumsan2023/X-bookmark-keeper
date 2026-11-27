@@ -38,6 +38,7 @@ export function postsToSelfContainedHtml(posts: Post[], title = 'X Bookmarks Arc
           handle: p.quoted.screen_name,
           text: p.quoted.text,
           article_title: p.quoted.article_title || '',
+          article_text: p.quoted.article_text || '',
         }
       : null,
     thread: (p.thread || []).map((t) => ({ text: t.text, created_at: t.created_at, media: t.media || [] })),
@@ -109,7 +110,7 @@ function render(){
   const filtered = POSTS.filter(p => {
     if (folder && p.folder !== folder) return false;
     if (!kw) return true;
-    const hay = (p.name+' '+p.handle+' '+p.text+' '+(p.quoted?.text||'')+' '+(p.quoted?.article_title||'')+' '+p.note+' '+p.tags.join(' ')).toLowerCase();
+    const hay = (p.name+' '+p.handle+' '+p.text+' '+(p.quoted?.text||'')+' '+(p.quoted?.article_title||'')+' '+(p.quoted?.article_text||'')+' '+p.note+' '+p.tags.join(' ')).toLowerCase();
     return kw.split(/\\s+/).every(t => hay.includes(t));
   });
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -119,7 +120,7 @@ function render(){
   listEl.innerHTML = slice.map(p => {
     const dt = p.created_at ? new Date(p.created_at).toISOString().slice(0,10) : '';
     const threadHtml = p.thread.map((t,i) => '<div class="thread-part"><strong>'+(i+2)+'/'+(p.thread.length+1)+'</strong> '+esc(t.text)+'</div>').join('');
-    const quotedHtml = p.quoted ? '<div class="quoted"><strong>'+esc(p.quoted.name)+' (@'+esc(p.quoted.handle)+')</strong>'+(p.quoted.article_title?'<div>📄 '+esc(p.quoted.article_title)+'</div>':'')+'<div>'+esc(p.quoted.text)+'</div></div>' : '';
+    const quotedHtml = p.quoted ? '<div class="quoted"><strong>'+esc(p.quoted.name)+' (@'+esc(p.quoted.handle)+')</strong>'+(p.quoted.article_title?'<div style="font-weight:600;margin:4px 0">📄 '+esc(p.quoted.article_title)+'</div>':'')+'<div class="text">'+esc(p.quoted.article_text||p.quoted.text)+'</div></div>' : '';
     const mediaHtml = p.media.length ? '<div class="media">'+p.media.map(m => '<a href="'+esc(m.video_url||m.url)+'" target="_blank" rel="noreferrer"><img loading="lazy" src="'+esc(m.url)+'" alt="'+esc(m.alt)+'"/></a>').join('')+'</div>' : '';
     const chips = [p.folder ? '<span class="chip folder">'+esc(p.folder)+'</span>' : '', ...p.tags.map(t => '<span class="chip">#'+esc(t)+'</span>')].filter(Boolean).join('');
     return '<article class="card"><div class="head"><div><span class="author">'+esc(p.name)+'</span><span class="handle">@'+esc(p.handle)+'</span></div><div class="date">'+dt+' · <a href="'+esc(p.url)+'" target="_blank" rel="noreferrer">原文 ↗</a></div></div><div class="text">'+esc(p.text)+'</div>'+threadHtml+quotedHtml+mediaHtml+(p.note?'<div class="note">📝 '+esc(p.note)+'</div>':'')+'<div class="chips">'+chips+'</div><div class="meta-row" style="margin-top:8px"><span>❤️ '+(p.metrics?.likes||0)+'</span><span>🔖 '+(p.metrics?.bookmarks||0)+'</span><span>👀 '+(p.metrics?.views||0)+'</span></div></article>';

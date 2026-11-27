@@ -10,6 +10,21 @@ import {
 import { UNKNOWN_ACCOUNT, addAccount, decideDelete, normalizeHandle, postAccounts } from '@/shared/accounts'
 import { db } from './db'
 
+/** 为新同步的书签自动附加「长文章 / X文章 / 长Quote」形态标签，避免新入库内容漏进智能分类 */
+function inferAutoFormTags(p: Pick<ParsedPost, 'has_article' | 'has_quote' | 'text' | 'quoted'>): string[] {
+  const tags: string[] = []
+  const textLen = (p.text || '').trim().length
+  const qTextLen = (p.quoted?.text || '').trim().length
+  const hasQuotedArticle = !!(p.quoted?.article_title || p.quoted?.article_id)
+  const isXArticle = p.has_article === 1 || hasQuotedArticle
+  const isLongArticle = isXArticle || textLen >= 600
+  const isLongQuote = p.has_quote === 1 && (textLen >= 260 || qTextLen >= 500 || hasQuotedArticle)
+  if (isLongArticle) tags.push('长文章')
+  if (isXArticle) tags.push('X文章')
+  if (isLongQuote) tags.push('长Quote')
+  return tags
+}
+
 /** 把解析结果合并进本地记录: 保留本地字段 (标签/文件夹/备注/线程/saved_at/source) */
 export function mergePost(
   existing: Post | undefined,
@@ -24,7 +39,7 @@ export function mergePost(
     return {
       ...p,
       folder: opts.folder ?? '',
-      tags: [],
+      tags: inferAutoFormTags(p),
       status: 'active',
       saved_at: now,
       sync_run: runId,
@@ -46,9 +61,34 @@ export function mergePost(
   } else {
     nextFolder = opts.folder ?? existing.folder
   }
+  const keepExistingText =
+    existing.text.length > p.text.length &&
+    (!!existing.article_fetched_at || existing.has_article === 1 || existing.text.length - p.text.length >= 120)
+  const mergedQuoted = p.quoted
+    ? {
+        ...existing.quoted,
+        ...p.quoted,
+        text:
+          existing.quoted && existing.quoted.text.length > p.quoted.text.length
+            ? existing.quoted.text
+            : p.quoted.text,
+        article_text:
+          existing.quoted?.article_text &&
+          existing.quoted.article_text.length > (p.quoted.article_text?.length ?? 0)
+            ? existing.quoted.article_text
+            : p.quoted.article_text,
+        article_title: p.quoted.article_title || existing.quoted?.article_title,
+        article_id: p.quoted.article_id || existing.quoted?.article_id,
+      }
+    : existing.quoted
+
   return {
     ...existing,
     ...p,
+    text: keepExistingText ? existing.text : p.text,
+    quoted: mergedQuoted,
+    article_title: p.article_title || existing.article_title,
+    article_fetched_at: p.article_fetched_at ?? existing.article_fetched_at,
     // 文件夹时间线里的 sortIndex 与书签总表不同, 不覆盖已有值
     sort_index: opts.keepSortIndex || (incomingSource === 'timeline' && wasBookmark) ? existing.sort_index : p.sort_index,
     folder: nextFolder,

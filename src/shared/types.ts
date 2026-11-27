@@ -23,6 +23,8 @@ export interface QuotedPost {
   article_id?: string
   article_title?: string
   article_preview?: string
+  /** 补全后保存的被引用 X 文章完整正文 */
+  article_text?: string
   media?: MediaItem[]
 }
 
@@ -69,6 +71,12 @@ export interface Post {
    * Optional for older records; classify falls back to URL heuristics when missing.
    */
   has_article?: 0 | 1
+  /** X Article 标题（如有） */
+  article_title?: string
+  /** 最近一次拉取 X 文章全文（含引用文章全文）的时间戳 */
+  article_fetched_at?: number
+  /** 最近一次批量体检尝试补全的时间戳（用于续跑跳过已核验过的不可用帖） */
+  article_checked_at?: number
   /** 文件夹名,空字符串=未归类 */
   folder: string
   tags: string[]
@@ -172,6 +180,11 @@ export interface LlmConfig {
   allowNewTags: boolean
 }
 
+export interface NotionDatabaseEntry {
+  id: string
+  name: string
+}
+
 export interface Settings {
   lang: Lang
   /** UI theme; default dark (X-style) */
@@ -197,12 +210,16 @@ export interface Settings {
   autoSyncOnXOpen: boolean
   /** v2: 同一账号自动增量同步的最小冷却分钟数 (默认 20 分钟) */
   autoSyncCooldownMin: number
+  /** v2: 新同步书签自动补全 X 文章全文（含引用文章全文） */
+  autoRepairArticles: boolean
   /** v2: X 端安全清理队列每日取消收藏上限 (默认 50) */
   cleanupDailyCap: number
   /** v2: Notion Integration Token (仅存本机, 备份默认不含) */
   notionToken: string
-  /** v2: Notion 目标数据库 ID */
+  /** v2: Notion 默认目标数据库 ID */
   notionDatabaseId: string
+  /** v2.1: 可选多个 Notion 数据库列表，支持划词引用批注时自由选择目标库 */
+  notionDatabases?: NotionDatabaseEntry[]
   llm: LlmConfig
 }
 
@@ -221,9 +238,11 @@ export const DEFAULT_SETTINGS: Settings = {
   exportBatchSize: 1000,
   autoSyncOnXOpen: true,
   autoSyncCooldownMin: 20,
+  autoRepairArticles: true,
   cleanupDailyCap: 50,
   notionToken: '',
   notionDatabaseId: '',
+  notionDatabases: [],
   llm: {
     endpoint: 'https://api.openai.com/v1',
     apiKey: '',
@@ -252,7 +271,18 @@ export type BgRequest =
   | { type: 'bookmarks/delete'; tweetIds: string[]; removeLocal: boolean }
   | { type: 'cleanup/run'; limit?: number; removeLocal?: boolean }
   | { type: 'repair/incomplete'; tweetIds: string[] }
+  | { type: 'repair/single'; tweetId: string }
   | { type: 'notion/push'; tweetIds: string[] }
+  | { type: 'notion/listDatabases'; token?: string }
+  | {
+      type: 'notion/pushQuote'
+      tweetId: string
+      databaseId: string
+      quoteText: string
+      annotation: string
+      includeFullPost: boolean
+      saveLocalNote: boolean
+    }
   | { type: 'folder/push'; tweetIds: string[]; folder: string }
   | { type: 'threads/fetch'; tweetIds: string[] }
   | { type: 'auth/status' }

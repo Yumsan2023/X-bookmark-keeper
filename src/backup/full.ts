@@ -11,7 +11,7 @@ import { mergeSettings } from '@/shared/storage'
 
 export const FULL_BACKUP_FORMAT = 'x-toolkit-full' as const
 export const FULL_BACKUP_VERSION = 1 as const
-export const APP_VERSION = '2.0.0'
+export const APP_VERSION = '2.1.0'
 /**
  * Shared ceiling for Settings → 从备份恢复.
  * `File.size` is bytes; `inspectBackupText` uses JavaScript string length.
