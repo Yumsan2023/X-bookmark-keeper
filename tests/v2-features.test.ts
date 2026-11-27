@@ -9,9 +9,12 @@ import {
 } from '@/api/parser'
 import { decideAutoSync } from '@/background/auto-sync'
 import { cancelTask, recoverInterruptedTask } from '@/background/actions'
+import { SyncEngine } from '@/background/sync-engine'
+import { XClient } from '@/api/client'
+import { XApiError } from '@/api/errors'
 import { getCleanupSummary, importCleanupQueueJson, removeCleanupItems } from '@/db/cleanup'
 import { db } from '@/db/db'
-import { mergePost, upsertParsed } from '@/db/posts'
+import { drainDirtyPostIds, mergePost, recordDirtyPostIds, upsertParsed } from '@/db/posts'
 import { countYearsForQuery, invalidateStubCache, pagePostsNoText } from '@/db/query'
 import { postsToSelfContainedHtml } from '@/export/html'
 import { postToMarkdown } from '@/export/markdown'
@@ -19,12 +22,12 @@ import { buildNotionPagePayload, buildNotionQuotePayload, listNotionDatabases, p
 import { SearchEngine } from '@/search/engine'
 import { parseQuery } from '@/search/query-parser'
 import { buildIndexBatched, searchPage } from '@/search/service'
-import { threadResponse, tweet } from './fixtures/builders'
+import { bookmarksPage, cursorEntry, threadResponse, tweet, tweetEntry } from './fixtures/builders'
 import { parseCompactNumber } from '@/strike/lib/domparse.js'
 import { computeHumanDwellMs } from '@/strike/content/foryou.js'
 import { pickDailyReviewCandidates } from '@/ui/daily-review'
 import { findMatchedSnippet } from '@/ui/v2/HighlightText'
-import { STORAGE_KEYS, type Post } from '@/shared/types'
+import { DEFAULT_SETTINGS, STORAGE_KEYS, type Post } from '@/shared/types'
 
 function makePost(over: Partial<Post> = {}): Post {
   return {
@@ -500,5 +503,67 @@ describe('v2 X Article full-body parsing, quoted article repair detection & clea
     store[STORAGE_KEYS.task] = { id: 't2', kind: 'repair', status: 'running', total: 20, done: 12, failed: 0, updated_at: Date.now() }
     await recoverInterruptedTask()
     expect((store[STORAGE_KEYS.task] as any).status).toBe('cancelled')
+
+    // Dirty post IDs queue records and drains cleanly for incremental index updates
+    await recordDirtyPostIds(['6001', '6002', '6001'])
+    expect(await drainDirtyPostIds()).toEqual(['6001', '6002'])
+    expect(await drainDirtyPostIds()).toEqual([])
+  })
+
+  it('enforces auto-sync maxPages cap, aborts bounded auto-sync on 429 without scheduling wake, and verifies DeleteBookmark Done', async () => {
+    await db.posts.clear()
+    let calls = 0
+    const wake = vi.fn()
+    const engine = new SyncEngine({
+      api: {
+        getBookmarks: async () => {
+          calls++
+          return bookmarksPage([
+            tweetEntry(tweet({ id: String(7000 + calls), text: `p${calls}` }), String(9000 - calls)),
+            cursorEntry(`cur_${calls}`),
+          ])
+        },
+        getFolders: async () => ({}),
+        getFolderTimeline: async () => ({}),
+        getTweetDetail: async () => ({}),
+      },
+      getSettings: async () => ({ ...DEFAULT_SETTINGS, delayMinSec: 0, delayMaxSec: 0, syncFolders: true }),
+      loadProgress: async () => undefined,
+      saveProgress: async () => {},
+      scheduleWake: wake,
+      sleep: async () => {},
+    })
+    const prog = await engine.start('incremental', { account: 'alice_demo', maxPages: 3, skipFolders: true })
+    expect(prog.status).toBe('done')
+    expect(calls).toBe(3)
+
+    // Bounded auto-sync encountering 429 exits immediately without scheduling a wake alarm
+    const engine429 = new SyncEngine({
+      api: {
+        getBookmarks: async () => {
+          throw new XApiError('rate_limit', 'HTTP 429', { resetAt: Date.now() + 60_000, status: 429 })
+        },
+        getFolders: async () => ({}),
+        getFolderTimeline: async () => ({}),
+        getTweetDetail: async () => ({}),
+      },
+      getSettings: async () => ({ ...DEFAULT_SETTINGS, delayMinSec: 0, delayMaxSec: 0 }),
+      loadProgress: async () => undefined,
+      saveProgress: async () => {},
+      scheduleWake: wake,
+      sleep: async () => {},
+    })
+    const prog429 = await engine429.start('incremental', { account: 'alice_demo', maxPages: 3, skipFolders: true })
+    expect(prog429.status).toBe('error')
+    expect(prog429.error_code).toBe('rate_limit')
+    expect(wake).not.toHaveBeenCalled()
+
+    // DeleteBookmark rejects HTTP 200 responses that do not confirm Done
+    const client = new XClient({
+      getAuth: async () => ({ token: 'Bearer t', csrf: 'c', uuid: '', transaction_id: '', captured_at: Date.now() }),
+      getQueryId: async () => 'qid',
+      fetchImpl: (async () => new Response(JSON.stringify({ data: {} }), { status: 200 })) as unknown as typeof fetch,
+    })
+    await expect(client.deleteBookmark('7001')).rejects.toThrow(/Done/)
   })
 })

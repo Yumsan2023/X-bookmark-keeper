@@ -1,6 +1,6 @@
 # X Toolkit — X (Twitter) 书签知识库工作台 + 时间线实验室 (Chrome MV3 扩展)
 
-**当前版本: 2.1.1** — 面向超大规模书签库（60,000+ 条）重构的 **Linear / Readwise 风格知识工作台**。支持热冷分离架构（离线 Python SQLite 冷库 + 本地 `bge-m3` / LLM 归类 + 扩展内 22MB 精选热库）、打开 `x.com` 自动识别登录账号静默增量同步、10 大领域文件夹拖拽归类、每日唤醒（Daily Review）、安全清理队列（防回灌墓碑 + 限速取消收藏）、Notion 直推与自包含离线 HTML 导出；并将 **For You 智能策展**与 **Strike Ledger 打击账本**统一收拢到可选的「时间线实验室」（默认无打扰）。
+**当前版本: 2.1.2** — 面向超大规模书签库（60,000+ 条）重构的 **Linear / Readwise 风格知识工作台**。支持热冷分离架构（离线 Python SQLite 冷库 + 本地 `bge-m3` / LLM 归类 + 扩展内 22MB 精选热库）、打开 `x.com` 自动识别登录账号静默增量同步、10 大领域文件夹拖拽归类、每日唤醒（Daily Review）、安全清理队列（防回灌墓碑 + 限速取消收藏）、Notion 直推与自包含离线 HTML 导出；并将 **For You 智能策展**与 **Strike Ledger 打击账本**统一收拢到可选的「时间线实验室」（默认无打扰）。
 
 本地书签库 IndexedDB 名仍为 `bookmark-keeper`（Dexie schema 已平滑升级至 v7），旧库可直接升级。请停用单独安装的旧版 X Strike Ledger，避免重复注入内容脚本。
 
@@ -20,7 +20,7 @@
 <details>
 <summary><strong>English summary</strong></summary>
 
-Chrome MV3 extension **X Toolkit v2.1.1**. A Readwise/Linear-inspired local knowledge workbench for X bookmarks with hot/cold architecture (`data-pipeline/` offline SQLite + local `bge-m3` funnel), silent auto-sync on opening `x.com`, full-text Chinese/English search with keyword highlighting, X Article full-body + image repair, quote-to-Notion annotation, Daily Review, rate-limited Safe Cleanup Queue with cold tombstones, self-contained HTML / Obsidian export, plus an optional non-intrusive Timeline Lab (For You curation + Strike Ledger). MIT License.
+Chrome MV3 extension **X Toolkit v2.1.2**. A Readwise/Linear-inspired local knowledge workbench for X bookmarks with hot/cold architecture (`data-pipeline/` offline SQLite + local `bge-m3` funnel), silent auto-sync on opening `x.com`, full-text Chinese/English search with keyword highlighting, X Article full-body + image repair, quote-to-Notion annotation, Daily Review, rate-limited Safe Cleanup Queue with cold tombstones, self-contained HTML / Obsidian export, plus an optional non-intrusive Timeline Lab (For You curation + Strike Ledger). MIT License.
 
 Step-by-step: [docs/USAGE.md](./docs/USAGE.md) · Develop: [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md) · Offline Pipeline: [data-pipeline/README.md](./data-pipeline/README.md) · Contribute: [CONTRIBUTING.md](./CONTRIBUTING.md)
 

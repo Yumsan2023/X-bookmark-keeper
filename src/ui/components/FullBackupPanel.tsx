@@ -86,13 +86,15 @@ export function FullBackupPanel({ onNotify, onLibraryChange }: { onNotify?: (mes
     setBusy(true)
     setErr('')
     try {
-      // 防呆安全网：整库替换且本机已有数据时，先自动下载一份当前库的完整安全备份，防止误覆盖丢数据
+      // 防呆安全网：整库替换且本机已有数据时，必须先成功导出当前库的完整安全备份；导出失败则中止恢复
       if (preview.kind !== 'bookmarks-account' && localCount > 0) {
         try {
           const safetyFile = await collectFullBackup(false)
           saveBlob(`safety-${backupFileName()}`, serializeBackup(safetyFile), 'application/json')
-        } catch {
-          /* 安全备份导出失败不阻断，但继续执行用户已确认的恢复 */
+        } catch (backupErr) {
+          const detail = backupErr instanceof Error ? backupErr.message : '未知错误'
+          setErr(`安全备份导出失败，已中止覆盖恢复（本机数据未被修改）：${detail}`)
+          return
         }
       }
       await applyRestorePlan(preview)

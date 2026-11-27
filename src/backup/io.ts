@@ -89,7 +89,16 @@ async function replaceBookmarkStorage(plan: RestorePlan): Promise<void> {
     [k: string]: unknown
   }
   const currentSettings = (current[STORAGE_KEYS.settings] ?? {}) as Partial<Settings>
-  const next = storage.settings
+  const safeMinDelay = Math.max(3, Number(storage.settings.delayMinSec) || 3)
+  const safeMaxDelay = Math.max(safeMinDelay, Number(storage.settings.delayMaxSec) || 8)
+  const next: Settings = {
+    ...storage.settings,
+    delayMinSec: safeMinDelay,
+    delayMaxSec: safeMaxDelay,
+    syncFolders: false,
+    autoSyncOnXOpen: false,
+    autoRepairArticles: false,
+  }
   if (!plan.secretsIncluded) {
     next.llm = { ...next.llm, apiKey: currentSettings.llm?.apiKey ?? '' }
   }

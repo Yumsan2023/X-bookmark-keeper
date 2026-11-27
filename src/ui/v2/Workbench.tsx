@@ -318,6 +318,7 @@ export function Workbench({ mode }: { mode: 'full' | 'side' }) {
       const nextPosts = res.hits.map((h) => h.post)
       setPosts(nextPosts)
       setTotal(res.total)
+      setFocusedIdx(0)
       setSelectedPost((cur) => (cur ? nextPosts.find((p) => p.tweet_id === cur.tweet_id) ?? cur : null))
     } finally {
       if (reqId === feedReqIdRef.current) {
@@ -438,10 +439,10 @@ export function Workbench({ mode }: { mode: 'full' | 'side' }) {
         } else if (e.key === 'Enter') {
           e.preventDefault()
           if (posts[focusedIdx]) setSelectedPost(posts[focusedIdx])
-        } else if (e.key === 'x' && posts[focusedIdx]) {
+        } else if (e.key === 'X' && e.shiftKey && posts[focusedIdx]) {
           e.preventDefault()
           const target = posts[focusedIdx]
-          void enqueuePostsForCleanup([target], 'shortcut:x')
+          void enqueuePostsForCleanup([target], 'shortcut:shift+x')
             .then(() => moveToFolder([target.tweet_id], '待清理'))
             .then(() => bumpDbVersion())
             .then(() => {
@@ -1265,7 +1266,7 @@ export function Workbench({ mode }: { mode: 'full' | 'side' }) {
                   <span className="hidden items-center gap-1 xl:inline-flex">
                     <kbd className="rounded border px-1" style={{ borderColor: 'var(--border)' }}>J/K</kbd>
                     <kbd className="rounded border px-1" style={{ borderColor: 'var(--border)' }}>Enter</kbd>
-                    <kbd className="rounded border px-1" style={{ borderColor: 'var(--border)' }}>X</kbd>
+                    <kbd className="rounded border px-1" style={{ borderColor: 'var(--border)' }} title="Shift+X 移入待清理">⇧X</kbd>
                   </span>
                 </div>
               </div>

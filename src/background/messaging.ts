@@ -10,7 +10,7 @@ import type { ForYouBookmarkItem, ForYouDestination, ForYouValidationRow } from 
 import { buildProfileJob, readForYouProfile, readForYouSettings, readLastForYouValidation, validateJob, type ForYouProfileProgress } from '@/foryou/runner'
 import { listNotionDatabases, pushQuoteToNotion } from '@/export/notion'
 import { db } from '@/db/db'
-import { countPosts } from '@/db/posts'
+import { countPosts, recordDirtyPostIds } from '@/db/posts'
 import { getAllQueryIds, getQueryId, refreshQueryIds } from './queryids'
 import { SyncEngine } from './sync-engine'
 import { TimelineSyncEngine } from './timeline-engine'
@@ -503,6 +503,7 @@ export async function handleMessage(msg: BgRequest): Promise<BgResponse> {
             .join('\n')
           const nextNote = post.note?.trim() ? `${post.note.trim()}\n\n${snippet}` : snippet
           await db.posts.update(post.tweet_id, { note: nextNote })
+          await recordDirtyPostIds([post.tweet_id])
           updatedPost = (await db.posts.get(post.tweet_id)) ?? { ...post, note: nextNote }
           await bumpDbVersion()
         }

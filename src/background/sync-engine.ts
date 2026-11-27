@@ -110,8 +110,9 @@ export class SyncEngine {
     }
   }
 
-  /** 带重试 / 限流退避的请求包装（单次同步累计 2 次 429 自动熔断退出，防无限等待） */
+  /** 带重试 / 限流退避的请求包装（单次同步累计 2 次 429 自动熔断退出；有界自动同步遇 429 直接退出不预约续跑闹钟） */
   private rateLimitStrikes = 0
+  private isAutoBounded = false
 
   private async call<T>(fn: () => Promise<T>): Promise<T> {
     let attempt = 0
@@ -124,11 +125,14 @@ export class SyncEngine {
         if (!(e instanceof XApiError)) throw e
         if (e.code === 'rate_limit') {
           this.rateLimitStrikes++
-          if (this.rateLimitStrikes >= 2) {
-            throw new XApiError('rate_limit', '连续触发限流 (HTTP 429) 达到上限，已自动暂停本次同步以保护账号', {
-              resetAt: e.resetAt,
-              status: 429,
-            })
+          if (this.isAutoBounded || this.rateLimitStrikes >= 2) {
+            throw new XApiError(
+              'rate_limit',
+              this.isAutoBounded
+                ? '静默自动同步触发限流 (HTTP 429)，已立即中止等待下次冷却'
+                : '连续触发限流 (HTTP 429) 达到上限，已自动暂停本次同步以保护账号',
+              { resetAt: e.resetAt, status: 429 },
+            )
           }
           const until = Math.max(e.resetAt ?? 0, this.now() + 5000) + 2000
           this.deps.scheduleWake?.(until)
@@ -169,6 +173,7 @@ export class SyncEngine {
     this.pauseRequested = false
     this.cancelRequested = false
     this.rateLimitStrikes = 0
+    this.isAutoBounded = !!(opts?.maxPages && opts.maxPages > 0)
     const settings = await this.deps.getSettings()
     const saved = await this.deps.loadProgress()
     const now = this.now()

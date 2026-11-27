@@ -11,7 +11,7 @@ import {
 } from '@/api/parser'
 import { addColdTombstones, listCleanupQueue, updateCleanupStatus } from '@/db/cleanup'
 import { db } from '@/db/db'
-import { addTags, moveToFolder, releaseBookmark, upsertParsed } from '@/db/posts'
+import { addTags, moveToFolder, recordDirtyPostIds, releaseBookmark, upsertParsed } from '@/db/posts'
 import { pushPostsToNotion } from '@/export/notion'
 import { FORYOU_AUTO_TAG, type ForYouBookmarkItem, type ForYouDestination } from '@/foryou/types'
 import { recordForYouDecision } from '@/foryou/decisions'
@@ -737,6 +737,7 @@ export async function repairSinglePost(
     ...(articleFull || quotedArticleFull ? { article_fetched_at: Date.now() } : {}),
   }
   await db.posts.update(id, patch)
+  await recordDirtyPostIds([id])
   const updatedPost = await db.posts.get(id)
   await bumpDbVersion()
 

@@ -179,7 +179,9 @@ export function useLibrary(): Library {
         timer.current = setTimeout(() => {
           void (async () => {
             const progRes = await chrome.storage.local.get(STORAGE_KEYS.progress).catch(() => ({} as Record<string, any>))
-            const syncRunning = progRes[STORAGE_KEYS.progress]?.status === 'running'
+            const prog = progRes[STORAGE_KEYS.progress]
+            // 仅当同步处于 running 且 30 秒内有心跳更新时才跳过重刷，避免残留僵尸进度卡死界面刷新
+            const syncRunning = prog?.status === 'running' && Date.now() - Number(prog.updated_at ?? 0) < 30_000
             invalidateStubCache()
             const totalCount = await countPosts()
             if (syncRunning) {
